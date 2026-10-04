@@ -148,7 +148,7 @@ def api_status():
 @app.post('/api/refresh')
 def api_refresh():
     try:
-        started=_start_background_refresh(force_stats=True)
+        started=_start_background_refresh(force_stats=False)
         d=load()
         return jsonify(ok=True,data={'status':'started' if started else 'already_running','updated':d.get('updated'),'played':len(current(d)),'upcoming':len(upcoming(d)),'teams':len(teams(d)),'schedule':len(d.get('schedule',[])),'errors':d.get('errors',[]),'refreshing':_refresh_running})
     except Exception as e:return jsonify(ok=False,error=str(e)),500
