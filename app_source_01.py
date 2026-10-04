@@ -1,4 +1,4 @@
-import csv, io, json, math, os, re, statistics, time, subprocess
+import csv, io, json, math, os, re, statistics, time, subprocess, threading
 from datetime import datetime, date, timedelta
 from urllib.request import Request, urlopen
 from urllib.parse import quote_plus
@@ -103,6 +103,29 @@ def _seed_cache():
     seed=os.path.join(BASE,'cache_seed.json')
     d=_read_json(seed)
     return d if isinstance(d,dict) and len(d.get('schedule',[]))==380 else None
+
+_refresh_lock=threading.Lock()
+_refresh_running=False
+
+def _start_background_refresh(force_stats=False):
+    global _refresh_running
+    with _refresh_lock:
+        if _refresh_running:
+            return False
+        _refresh_running=True
+
+    def worker():
+        global _refresh_running
+        try:
+            refresh(force_stats=force_stats)
+        except Exception:
+            pass
+        finally:
+            with _refresh_lock:
+                _refresh_running=False
+
+    threading.Thread(target=worker,daemon=True,name='football-analyzer-refresh').start()
+    return True
 
 def refresh(force_stats=False):
     # IMPORTANT: never replace a working cache with an empty cache just because
@@ -277,14 +300,25 @@ def enrich_current_stats(d, force=False):
     return d
 
 def load():
-    if os.path.exists(CACHE):
-        try:
-            d=json.load(open(CACHE,encoding='utf-8'))
+    # NEVER block the web UI on a data refresh. If a valid cache exists, return it
+    # immediately and refresh in the background when it is stale.
+    try:
+        d=json.load(open(CACHE,encoding='utf-8')) if os.path.exists(CACHE) else None
+        if isinstance(d,dict) and len(d.get('schedule',[]))==380:
             age=time.time()-os.path.getmtime(CACHE)
-            # Rebuild old V8 caches once, then keep data fresh without requiring a manual refresh.
-            if len(d.get('schedule',[]))==380 and d.get('validation',{}).get('version')==7 and age < 1200:
-                return d
-        except:pass
+            if age >= 1200 or d.get('validation',{}).get('version')!=7:
+                _start_background_refresh(force_stats=False)
+            return d
+    except Exception:
+        pass
+    seed=_seed_cache()
+    if seed:
+        d={'updated':'','seasons':{},'fixtures':[],'schedule':seed,'errors':[],'validation':{}}
+        try:
+            with open(CACHE,'w',encoding='utf-8') as f:json.dump(d,f,ensure_ascii=False)
+        except Exception:pass
+        _start_background_refresh(force_stats=False)
+        return d
     return refresh()
 
 def played(d):return [r for rs in d.get('seasons',{}).values() for r in rs if r.get('hg') is not None and r.get('ag') is not None]
