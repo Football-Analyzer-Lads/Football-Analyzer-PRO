@@ -94,9 +94,6 @@ def main():
 
             roots = [p for p in extract.iterdir() if p.name != '__MACOSX']
             source = roots[0] if len(roots) == 1 and roots[0].is_dir() else extract
-            if not (source / 'app.py').exists():
-                print('AUTO-UPDATE: sorgente GitHub non valida: app.py non trovato.')
-                return 1
 
             backup.mkdir()
             copy_tree(BASE, backup)
