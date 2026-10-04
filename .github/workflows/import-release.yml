@@ -1,0 +1,52 @@
+name: Import V6_1_2 source
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  import:
+    if: github.event.head_commit.message != 'Import V6_1_2 source from release'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download V6_1_2 release
+        run: |
+          curl -L --fail \
+            -o /tmp/football_analyzer.zip \
+            "https://github.com/Football-Analyzer-Lads/Football-Analyzer-PRO/releases/download/V6_1_2/Football_Analyzer_PRO_V6_1_2_HALF_TIME_SMART.zip"
+
+      - name: Extract source
+        run: |
+          rm -rf /tmp/football_source
+          mkdir -p /tmp/football_source
+          unzip -q /tmp/football_analyzer.zip -d /tmp/football_source
+
+          find . -mindepth 1 -maxdepth 1 ! -name '.git' ! -name '.github' -exec rm -rf {} +
+          cp -R /tmp/football_source/. .
+
+          rm -rf .venv __pycache__ */__pycache__
+          rm -f config.env
+
+          cat > .gitignore <<'EOF'
+config.env
+.venv/
+__pycache__/
+*.pyc
+.DS_Store
+data/
+cache/
+EOF
+
+      - name: Commit imported source
+        run: |
+          git config user.name "Football-Analyzer-Lads"
+          git config user.email "f.biondi87@gmail.com"
+          git add -A
+          git commit -m "Import V6_1_2 source from release" || exit 0
+          git push
