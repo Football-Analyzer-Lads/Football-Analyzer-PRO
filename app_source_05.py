@@ -144,10 +144,13 @@ def news():
 def home():return render_template('index.html')
 @app.get('/api/status')
 def api_status():
-    d=load();return jsonify(ok=True,data={'updated':d.get('updated'),'played':len(current(d)),'upcoming':len(upcoming(d)),'teams':len(teams(d)),'schedule':len(d.get('schedule',[])),'errors':d.get('errors',[]),'validation':d.get('validation',{}),'updater':d.get('updater',{})})
+    d=load();return jsonify(ok=True,data={'updated':d.get('updated'),'played':len(current(d)),'upcoming':len(upcoming(d)),'teams':len(teams(d)),'schedule':len(d.get('schedule',[])),'errors':d.get('errors',[]),'validation':d.get('validation',{}),'updater':d.get('updater',{}),'refreshing':_refresh_running})
 @app.post('/api/refresh')
 def api_refresh():
-    try:return jsonify(ok=True,data={'updated':refresh(force_stats=True).get('updated'),'played':len(current(load())),'upcoming':len(upcoming(load())),'teams':len(teams(load())),'schedule':len(load().get('schedule',[])),'errors':load().get('errors',[])})
+    try:
+        started=_start_background_refresh(force_stats=True)
+        d=load()
+        return jsonify(ok=True,data={'status':'started' if started else 'already_running','updated':d.get('updated'),'played':len(current(d)),'upcoming':len(upcoming(d)),'teams':len(teams(d)),'schedule':len(d.get('schedule',[])),'errors':d.get('errors',[]),'refreshing':_refresh_running})
     except Exception as e:return jsonify(ok=False,error=str(e)),500
 @app.get('/api/matches')
 def api_matches():
