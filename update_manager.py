@@ -96,6 +96,12 @@ def main():
             roots = [p for p in extract.iterdir() if p.name != '__MACOSX']
             source = roots[0] if len(roots) == 1 and roots[0].is_dir() else extract
 
+            # Safety check: never install an archive that does not contain the
+            # current application bootstrap/source tree.
+            required = [source / 'app.py', source / 'app_source_01.py', source / 'app_source_04.py', source / 'static' / 'app.js']
+            if not all(p.exists() for p in required):
+                raise RuntimeError('GitHub archive incompleto: file applicazione mancanti')
+
             backup.mkdir()
             copy_tree(BASE, backup)
             try:
