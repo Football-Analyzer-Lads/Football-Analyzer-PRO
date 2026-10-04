@@ -3,7 +3,8 @@
 
 The application code lives on GitHub. Local user data, config and virtualenv
 stay on the Mac. This updater only replaces the application source when the
-GitHub main branch has changed; it does not refresh football data.
+GitHub main branch has changed; it downloads the exact commit SHA so a cached
+branch archive can never leave the Mac on stale source code. It does not refresh football data.
 """
 import json, os, shutil, sys, tempfile, urllib.request, zipfile
 from pathlib import Path
@@ -87,7 +88,7 @@ def main():
             archive = Path(td) / 'source.zip'
             extract = Path(td) / 'extract'
             backup = Path(td) / 'backup'
-            download(f'https://codeload.github.com/{repo}/zip/refs/heads/main', archive)
+            download(f'https://codeload.github.com/{repo}/zip/{latest_sha}', archive)
             extract.mkdir()
             with zipfile.ZipFile(archive) as z:
                 z.extractall(extract)
