@@ -136,76 +136,82 @@ def _volume_market_info(d,r,market):
     return {'prob':prob,'mean':mean,'line':line,'margin':margin,'kind':'shots' if prefix in ('TS','HS','AS') else 'sot' if prefix in ('SOT','HSOT','ASOT') else 'corners'}
 
 def best_engine(d,r,p,odds=None):
-    """Dynamic BEST across every supported market.
+    """Choose the BEST from the user's four requested market families.
 
-    A market can become BEST only when a real reference quote is available and
-    the quote is >= 1.40. Shots/SoT/corners remain available as candidates, but
-    are no longer forced to win.
+    BEST is intentionally independent of bookmaker availability. A real quote is
+    used for value when available, but missing odds never produce NO BET.
+
+    Allowed BEST families:
+      - GG / NG
+      - Over 2.5
+      - Total shots
+      - Shots on target (total/home/away)
     """
     odds=odds or {}
     ranked=[]
     halfctx=half_context_for_match(r)
-    for market,prob_pct in p.items():
-        if market.startswith(('_')):continue
-        try:prob=float(prob_pct)
-        except Exception:continue
-        if prob<=0 or prob>=.94:continue
+
+    allowed=['GG','NG','O2.5']
+    allowed += [k for k in p if re.match(r'^(TS|SOT|HS|AS|HSOT|ASOT)_[OU]\d+\.5$',k)]
+
+    qlevel=data_quality(d,r['home'],r['away']).get('level','limited')
+    quality_score={'high':1.0,'medium':.72,'limited':.45}.get(qlevel,.45)
+
+    for market in allowed:
+        if market not in p: continue
+        try: prob=float(p[market])
+        except Exception: continue
+        if prob<=0 or prob>=.94: continue
+
+        # Prefer the user's target probability band, but never require it.
+        band_score=max(0.0,1.0-abs(prob-.80)/.20)
+
         real=odds.get(market)
-        try:price=float(real) if real is not None else None
-        except Exception:price=None
-        if price is None or price<1.40:continue
-        implied=1/price
-        edge=prob-implied
-        # Do not promote clearly negative-value prices just because their raw
-        # probability is high. A tiny tolerance handles rounding/provider noise.
-        if edge < -0.015:continue
-        sig=market_signal_score(d,r,p,market) if not market.startswith(('TS_','HS_','AS_','SOT_','HSOT_','ASOT_','C_','HC_','AC_')) else 0.0
+        try: price=float(real) if real is not None else None
+        except Exception: price=None
+
+        implied=(1/price) if price and price>1 else None
+        edge=(prob-implied) if implied is not None else 0.0
+
         vm=_volume_market_info(d,r,market)
+        mean=margin=kind=None
         if vm:
             mean,margin,kind=vm['mean'],vm['margin'],vm['kind']
-            label_base={'shots':'Tiri','sot':'Tiri in porta','corners':'Corner'}[kind]
-            m=re.search(r'_(O|U)(\d+\.5)$',market);direction=m.group(1) if m else '';line=m.group(2) if m else ''
-            if market.startswith(('HS_','HSOT_','HC_')):label_base+=' casa'
-            elif market.startswith(('AS_','ASOT_','AC_')):label_base+=' trasferta'
-            label=f'{label_base} {direction}{line}'
-        elif market.startswith(('H1','H2')):
-            mean=margin=kind=None
-            hm=re.match(r'^(H1|H2)(TS|SOT|HS|AS|HSOT|ASOT)_(O|U)(\d+\.5)$',market)
-            if hm and halfctx.get('available'):
-                per,kindtag,dir_,ln=hm.groups();hh,aa=halfctx['home'],halfctx['away'];pre='first_' if per=='H1' else 'second_'
-                def hb(keyh,keya):
-                    hv=hh.get(pre+keyh);av=aa.get(pre+keya)
-                    return (.58*hv+.42*av) if hv is not None and av is not None else None
-                hmean=hb('shots','shots_against') if kindtag in ('TS','HS','AS') else hb('sot','sot_against')
-                amean=hb('shots' if kindtag in ('TS','HS','AS') else 'sot', 'shots_against' if kindtag in ('TS','HS','AS') else 'sot_against')
-                # Away expected volume uses the mirrored venue pair.
-                hv=aa.get(pre+('shots' if kindtag in ('TS','HS','AS') else 'sot')); av=hh.get(pre+('shots_against' if kindtag in ('TS','HS','AS') else 'sot_against'))
-                amean=(.58*hv+.42*av) if hv is not None and av is not None else None
-                if kindtag in ('TS','SOT'): mean=(hmean+amean) if hmean is not None and amean is not None else None
-                elif kindtag in ('HS','HSOT'): mean=hmean
-                else: mean=amean
-                line=float(ln);margin=(mean-line) if dir_=='O' else (line-mean) if mean is not None else None
-            label_base={'TS':'Tiri TOTALI','SOT':'SoT TOTALI','HS':'Tiri CASA','AS':'Tiri TRASFERTA','HSOT':'SoT CASA','ASOT':'SoT TRASFERTA'}.get(hm.group(2) if hm else '',market)
-            direction='Over' if hm and hm.group(3)=='O' else 'Under' if hm else ''
-            line=hm.group(4) if hm else ''
-            label=f'{"1°" if market.startswith("H1") else "2°"} tempo · {label_base} {direction} {line}'.strip()
+            labels={'shots':'Tiri','sot':'SoT'}
+            prefix=market.split('_',1)[0]
+            direction='Over' if '_O' in market else 'Under'
+            line=re.search(r'[OU](\d+\.5)$',market).group(1)
+            label_base=labels[kind]
+            if prefix in ('HS','HSOT'): label_base+=' CASA'
+            elif prefix in ('AS','ASOT'): label_base+=' TRASFERTA'
+            label=f'{label_base} {direction} {line}'
         else:
-            mean=margin=kind=None;label=market_display_label(market)
-        # Score balances model probability, positive market edge and scenario
-        # coherence. It does not simply choose the highest probability.
-        prob_score=max(0,min(1,(prob-.50)/.45))
-        edge_score=max(0,min(1,(edge+.01)/.15))
-        sig_score=max(0,min(1,(sig+1)/2))
-        price_score=1/(1+abs(price-1.65))
-        qlevel=data_quality(d,r['home'],r['away']).get('level','limited')
-        quality_score={'high':1.0,'medium':.72,'limited':.45}.get(qlevel,.45)
-        half_score=1.0 if halfctx.get('available') else .55
-        score=.39*prob_score+.33*edge_score+.12*sig_score+.08*price_score+.05*quality_score+.03*half_score
-        confidence=min(0.94,max(.50,prob*(.75+.25*quality_score)))
-        ranked.append({'market':market,'prob':round(prob*100,1),'fair':round(1/prob,2),'odd':round(price,2),'implied':round(implied*100,1),'edge':round(edge*100,1),'score':round(score,4),'confidence':round(confidence*100,1),'mean':round(mean,2) if mean is not None else None,'margin':round(margin,2) if margin is not None else None,'kind':kind,'label':label})
-    ranked.sort(key=lambda x:(x['score'],x['edge'],x['prob']),reverse=True)
-    best=ranked[0] if ranked else None
-    return best,ranked
+            label=market_display_label(market)
+
+        # Model-only markets are valid BEST picks. Real odds add value, but are
+        # not a prerequisite. Slightly reward coherent data quality and, when
+        # available, positive market edge.
+        edge_score=max(0.0,min(1.0,(edge+.05)/.15)) if price else .50
+        score=.72*band_score+.15*quality_score+.13*edge_score
+
+        ranked.append({
+            'market':market,
+            'prob':round(prob*100,1),
+            'fair':round(1/prob,2),
+            'odd':round(price,2) if price else None,
+            'implied':round(implied*100,1) if implied else None,
+            'edge':round(edge*100,1) if price else None,
+            'score':round(score,4),
+            'confidence':round(min(.94,max(.50,prob*(.75+.25*quality_score)))*100,1),
+            'mean':round(mean,2) if mean is not None else None,
+            'margin':round(margin,2) if margin is not None else None,
+            'kind':kind,
+            'label':label,
+            'quote_source':'bookmaker' if price else 'model'
+        })
+
+    ranked.sort(key=lambda x:(x['score'],x['prob']),reverse=True)
+    return (ranked[0] if ranked else None),ranked
 
 def shots_analysis(d,r,odds=None):
     """Always-on volume analysis without the old Under-selection bias.
