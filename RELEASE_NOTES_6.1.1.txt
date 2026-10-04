@@ -1,0 +1,9 @@
+FOOTBALL ANALYZER PRO V6.1.1
+
+- Added recent first-half / second-half behaviour to the model: goals, xG when available, shots and shots on target, with home/away venue split.
+- Added a start-index / second-half index so the engine can detect fast starters, slow starters and late-game intensity.
+- Added model-only 1H/2H goal and volume markets; they can become BEST only when a real reference quote is available.
+- Reference-odds parsing now recognises first-half/second-half Over/Under and selected half shots/SoT markets when supplied by the provider.
+- BEST now uses probability + value + scenario coherence + data quality + half-time context and rejects model probabilities above 94%.
+- SHOTS ANALYSIS no longer chooses a line simply because it is closest to 75%; Over and Under compete symmetrically using projected mean, league baseline and quote value when available.
+- SoT labels are explicit: TOTAL, CASA, TRASFERTA.

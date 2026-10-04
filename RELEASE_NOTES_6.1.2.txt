@@ -1,0 +1,9 @@
+FOOTBALL ANALYZER PRO V6.1.2
+
+- Corrected first/second-half shot and SoT modelling: H1/H2 TS and SOT now represent TOTAL home+away volume, while HS/AS and HSOT/ASOT remain team-specific.
+- Corrected half-time market signal calculations so both teams' production and concession contribute to total projected volume.
+- Start/second-half indices now combine xG/goals with shots and SoT instead of relying on a single metric.
+- Kept Over and Under symmetric: the engine does not prefer Under by construction.
+- Improved BEST labels for 1H/2H volume markets.
+- Expanded match detail popup with first/second-half goals, xG, shots and SoT and clearer home/away start indices.
+- Preserved the real-odds requirement for BEST: reference quote >= 1.40 and model probability < 94%.

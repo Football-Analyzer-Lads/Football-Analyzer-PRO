@@ -1,0 +1,9 @@
+Football Analyzer PRO v6.0.2
+
+BEST market selection refinement:
+- BEST now targets playable markets with minimum effective price 1.40.
+- Real bookmaker quote is used when available; otherwise model fair price is the gate.
+- Broad total multigol ranges such as MG1-3/MG1-4 are excluded from BEST.
+- Higher/narrower multigol scenarios and team multigols are preferred when supported by the model.
+- Combo, Over/Under, 1X2 and goal markets can become BEST when the scenario and price support them.
+- Quote information is passed directly into BEST ranking.

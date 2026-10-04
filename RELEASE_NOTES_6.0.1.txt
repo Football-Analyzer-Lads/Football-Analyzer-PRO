@@ -1,0 +1,10 @@
+Football Analyzer PRO v6.0.1
+
+UI fix:
+- BEST / algoritmo is highlighted in green for faster reading.
+- Removed confusing “Contesto n/d” from the Giornate table.
+- Shows a clear “Pronostico algoritmo” label under BEST.
+
+Updater fix:
+- Preserves context/news caches.
+- Restores executable permission on start.command and install.command after updates.

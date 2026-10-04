@@ -1,0 +1,13 @@
+Football Analyzer PRO v6.1.0
+
+DYNAMIC BEST + SHOTS ANALYSIS + REFERENCE ODDS
+
+- BEST is now dynamic across supported goal markets, 1X2, double chance, BTTS, Over/Under, Multigol total/home/away and volume markets when real odds exist.
+- BEST requires a real reference quote >= 1.40. It does not use fair odds as a fake bookmaker quote.
+- Ranking balances model probability, positive value edge, scenario coherence and a reasonable playable price.
+- Bet365 is preferred when available through API-Football; otherwise another bookmaker with the best market coverage is used as Reference Odds.
+- Added SHOTS ANALYSIS to every match: total shots, shots on target, home/away shots and home/away shots on target, with model probability and reference quote when available.
+- Shot/SoT probabilities continue to use recency-weighted venue profiles, opponent concession, goals, xG/xGA, finishing/precision, form and bounded injury/news adjustments.
+- Multigol labels now support total, home and away markets in the BEST engine.
+- UI now shows BEST quota/value and a compact always-on SHOTS ANALYSIS column.
+- No direct bookmaker scraping.

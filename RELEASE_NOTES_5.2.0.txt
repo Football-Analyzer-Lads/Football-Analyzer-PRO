@@ -1,0 +1,6 @@
+Football Analyzer PRO v5.2.0
+
+- Fixed Team Analyzer Casa/Trasferta: selecting Solo casa or Solo trasferta now recalculates all team metrics on that venue subset.
+- Added API-Football odds diagnostics at /api/odds-status; the API key itself is never returned.
+- Improved API-Football error/status handling for bookmaker odds.
+- Preserves local config.env, caches and logs during automatic updates.

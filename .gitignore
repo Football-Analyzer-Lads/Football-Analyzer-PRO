@@ -1,0 +1,15 @@
+config.env
+.venv/
+__pycache__/
+*.pyc
+.DS_Store
+data/
+cache/
+cache.json
+odds_cache.json
+sofa_cache.json
+context_cache.json
+news_cache.json
+*.log
+*.pid
+.software_commit

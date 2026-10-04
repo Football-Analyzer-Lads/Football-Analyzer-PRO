@@ -1,0 +1,15 @@
+Football Analyzer PRO v6.0.0 — Complete Model Build
+
+- Real bookmaker odds via API-Football when the configured plan/provider exposes them.
+- Fixed odds lookup so API-Football is used even when Football-Data fixtures are temporarily unavailable.
+- Added paginated bookmaker parsing for Bet365 pre-match markets.
+- Added league-level injury/suspension context from API-Football with caching.
+- Added team-specific news context from Google News RSS with conservative keyword classification.
+- Added player-importance estimation from recent SofaScore lineups/history; provider IDs are kept separate.
+- Absence impact is role-aware: defensive absences affect opponent expected goals more, attacking absences affect own expected goals more.
+- News/injury modifiers are bounded and never dominate the statistical model.
+- Added transparent match context to the match detail popup.
+- Expanded Squadre metrics: possession, shots off target, blocked shots, plus venue-aware calculations.
+- Home/Away filters calculate the profile from the selected venue instead of merely filtering displayed rows.
+- Expanded Multigol and Combo display columns.
+- Preserved local config/cache during automatic GitHub updates.

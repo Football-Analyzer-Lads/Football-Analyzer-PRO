@@ -1,0 +1,11 @@
+Football Analyzer PRO v6.0.3
+
+BEST TIRI/CORNER
+- BEST is now restricted to shots, shots on target and corners.
+- Goal/1X2/multigol/BTTS markets are no longer eligible for BEST.
+- Uses recency-weighted home/away team volume profiles plus opponent conceded volume.
+- Generates over/under lines for total, home and away shots, shots on target and corners.
+- Targets a playable fair/bookmaker price of at least 1.40 and prefers prices close to 1.40.
+- BEST shows the expected mean and the statistical margin versus the selected line.
+- Real bookmaker prices are used automatically when the odds provider supplies matching volume-market keys; otherwise the model fair price is used as a temporary gate.
+- Early-season venue fallback uses the team's all-venue recency profile when fewer than two venue-specific matches exist.
