@@ -267,7 +267,10 @@ def scenario_reasons(d,r,best):
         reasons.append(f"1° tempo: {r['home']} GF {hh.get('first_gf',0):.2f} / xG {hh.get('first_xg',0) or 0:.2f} · {r['away']} GF {aa.get('first_gf',0):.2f} / xG {aa.get('first_xg',0) or 0:.2f}")
         reasons.append(f"2° tempo: {r['home']} GF {hh.get('second_gf',0):.2f} / xG {hh.get('second_xg',0) or 0:.2f} · {r['away']} GF {aa.get('second_gf',0):.2f} / xG {aa.get('second_xg',0) or 0:.2f}")
         reasons.append(f"Start index: {hh.get('start_index',0):+.2f} vs {aa.get('start_index',0):+.2f} · campione {hc.get('sample',0)} partite")
-    if best:reasons.append(f"scenario BEST: {best['market']} · probabilità {best['prob']:.1f}% · quota {best['odd']:.2f} · value {best['edge']:+.1f}%")
+    if best:
+        odd_txt=f"quota {best['odd']:.2f}" if best.get('odd') is not None else f"fair {best.get('fair','—')} · MODEL ONLY"
+        edge_txt=f" · value {best['edge']:+.1f}%" if best.get('edge') is not None else ''
+        reasons.append(f"scenario BEST: {best['market']} · probabilità {best['prob']:.1f}% · {odd_txt}{edge_txt}")
     return reasons
 
 def coupon_candidates(p,odds=None,lo=0.75,hi=0.85,ranked=None):
