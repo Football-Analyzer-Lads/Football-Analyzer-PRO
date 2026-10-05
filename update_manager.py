@@ -6,7 +6,7 @@ stay on the Mac. This updater only replaces the application source when the
 GitHub main branch has changed; it downloads the exact commit SHA so a cached
 branch archive can never leave the Mac on stale source code. It does not refresh football data.
 """
-import json, os, shutil, sys, tempfile, urllib.request, zipfile
+import json, os, shutil, sys, tempfile, urllib.request, zipfile, socket
 from pathlib import Path
 
 BASE = Path(__file__).resolve().parent
@@ -35,14 +35,16 @@ def local_config():
 
 
 def get_json(url):
+    print(f'AUTO-UPDATE: controllo {url}', flush=True)
     req = urllib.request.Request(url, headers={'User-Agent': 'FootballAnalyzer-Updater'})
     with urllib.request.urlopen(req, timeout=15) as r:
         return json.loads(r.read().decode('utf-8'))
 
 
 def download(url, path):
+    print(f'AUTO-UPDATE: download {url}', flush=True)
     req = urllib.request.Request(url, headers={'User-Agent': 'FootballAnalyzer-Updater'})
-    with urllib.request.urlopen(req, timeout=90) as r, open(path, 'wb') as f:
+    with urllib.request.urlopen(req, timeout=30) as r, open(path, 'wb') as f:
         shutil.copyfileobj(r, f)
 
 
@@ -80,10 +82,10 @@ def main():
 
         installed_sha = COMMIT_FILE.read_text(encoding='utf-8').strip() if COMMIT_FILE.exists() else ''
         if installed_sha == latest_sha:
-            print('AUTO-UPDATE: software già aggiornato.')
+            print('AUTO-UPDATE: software già aggiornato.', flush=True)
             return 0
 
-        print('AUTO-UPDATE: nuova versione del software disponibile...')
+        print(f'AUTO-UPDATE: nuova versione del software disponibile ({latest_sha[:12]})...', flush=True)
         with tempfile.TemporaryDirectory(prefix='fa_update_') as td:
             archive = Path(td) / 'source.zip'
             extract = Path(td) / 'extract'
@@ -115,11 +117,11 @@ def main():
                 copy_tree(backup, BASE)
                 raise
 
-        print('AUTO-UPDATE: software aggiornato.')
+        print('AUTO-UPDATE: software aggiornato.', flush=True)
         print('config.env, API key, .venv e dati locali sono stati preservati.')
         return 0
     except Exception as e:
-        print(f'AUTO-UPDATE: nessun aggiornamento applicato ({e}).')
+        print(f'AUTO-UPDATE: nessun aggiornamento applicato ({type(e).__name__}: {e}).', flush=True)
         return 0
 
 
