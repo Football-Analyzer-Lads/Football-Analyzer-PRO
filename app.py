@@ -13,5 +13,5 @@ _parts = sorted(BASE.glob("app_source_*.py"))
 if not _parts:
     raise RuntimeError("Application source chunks are missing.")
 
-_source = "".join(p.read_text(encoding="utf-8") for p in _parts)
+_source = "\n".join(p.read_text(encoding="utf-8").rstrip("\n") for p in _parts) + "\n"
 exec(compile(_source, str(_parts[0]), "exec"), globals(), globals())
