@@ -85,13 +85,16 @@ def player_history(team_id):
         side='home' if e.get('homeTeam',{}).get('id')==team_id else 'away'
         for s in player_stats_from_lineup(lu,side):
             if not s['minutes']:continue
-            a=agg.setdefault(s['id'],dict(s,apps=0));a['apps']+=1
+            a=agg.setdefault(s['id'],dict(s,apps=0,starts=0));a['apps']+=1
+            if not s.get('substitute'): a['starts']+=1
             for k in ('minutes','fouls','fouled','shots','sot','cards','goals','assists'):
                 if s.get(k) is not None:a[k]=(a.get(k) or 0)+(s.get(k) or 0)
     out=[]
     for a in agg.values():
         mins=a['minutes'] or 1
-        a['fouls90']=round((a.get('fouls') or 0)/mins*90,2);a['fouled90']=round((a.get('fouled') or 0)/mins*90,2);a['shots90']=round((a.get('shots') or 0)/mins*90,2);a['sot90']=round((a.get('sot') or 0)/mins*90,2);a['cards90']=round((a.get('cards') or 0)/mins*90,2);out.append(a)
+        a['fouls90']=round((a.get('fouls') or 0)/mins*90,2);a['fouled90']=round((a.get('fouled') or 0)/mins*90,2);a['shots90']=round((a.get('shots') or 0)/mins*90,2);a['sot90']=round((a.get('sot') or 0)/mins*90,2);a['cards90']=round((a.get('cards') or 0)/mins*90,2)
+        a['starterPct']=round(100*(a.get('starts',0)/max(1,a.get('apps',0))),1)
+        a['avgMinutes']=round(a.get('minutes',0)/max(1,a.get('apps',0)),1);out.append(a)
     return sorted(out,key=lambda x:x['minutes'],reverse=True)
 
 def player_props(d,r):
@@ -128,9 +131,12 @@ def player_props(d,r):
         hist=histories.get(p.get('side'),{}).get(p.get('id'))
         if not hist or hist.get('minutes',0)<120:
             continue
-        starter=not bool(p.get('substitute',False))
-        expected_min=78 if starter else 28
-        p['history']={'apps':hist.get('apps'),'minutes':hist.get('minutes'),
+        if lu:
+            starter=not bool(p.get('substitute',False)); starter_pct=100.0 if starter else 0.0; expected_min=78 if starter else 28
+        else:
+            starter_pct=float(hist.get('starterPct') or 0.0); expected_min=max(5.0,min(90.0,float(hist.get('avgMinutes') or 0.0))); starter=starter_pct>=50.0
+        p['history']={'apps':hist.get('apps'),'starts':hist.get('starts'),'minutes':hist.get('minutes'),
+                      'starterPct':starter_pct,'avgMinutes':hist.get('avgMinutes'),
                       'fouls90':hist.get('fouls90'),'fouled90':hist.get('fouled90'),
                       'shots90':hist.get('shots90'),'sot90':hist.get('sot90'),
                       'cards90':hist.get('cards90'),'goals90':round((hist.get('goals') or 0)/(hist.get('minutes') or 1)*90,2),
@@ -149,9 +155,12 @@ def player_props(d,r):
             for line in lines_by[label]:
                 pr=prob_over(lam,line)
                 props.append({'market':f'{label} O{line}','prob':round(pr*100,1),'lambda':round(lam,2)})
-        p['expectedMinutes']=expected_min
+        p['expectedMinutes']=round(expected_min)
+        p['starterProbability']=round(starter_pct,1)
         p['propCandidates']=sorted(props,key=lambda x:x['prob'],reverse=True)
-        p['dataBasis']=f"{hist.get('apps')} gare · {hist.get('minutes')} minuti storici"
+        p['foulProbability']=next((x['prob'] for x in props if x['market']=='Falli commessi O0.5'),None)
+        p['cardProbability']=next((x['prob'] for x in props if x['market']=='Cartellini O0.5'),None)
+        p['dataBasis']=f"{hist.get('apps')} gare · {hist.get('starts',0)} da titolare · {hist.get('minutes')} minuti storici"
         result['players'].append(p)
 
     result['players']=sorted(result['players'],key=lambda x:(x['team'],-(x.get('history',{}).get('minutes') or 0)))
