@@ -154,18 +154,37 @@ def api_refresh():
     except Exception as e:return jsonify(ok=False,error=str(e)),500
 @app.get('/api/matches')
 def api_matches():
-    d=load();mp={(r['date'],r['home'],r['away']):r['round'] for r in d['schedule']};out=[]
+    # Lightweight match index for the Player Analyzer. Do NOT run model_obj()
+    # for every upcoming match during startup.
+    d=load();mp={(r['date'],r['home'],r['away']):r['round'] for r in d['schedule']}
+    out=[]
     for r in upcoming(d):
-        rr=dict(r);rr['round']=mp.get((r['date'],r['home'],r['away']));out.append(model_obj(d,rr))
+        rr=dict(r);rr['round']=mp.get((r['date'],r['home'],r['away']));out.append(rr)
     return jsonify(ok=True,matches=out)
+
 @app.get('/api/rounds')
 def api_rounds():
+    # Lightweight calendar endpoint. Modeling is performed only for the
+    # selected round through /api/round/<n>.
     d=load();pk={(r['date'],r['home'],r['away']) for r in current(d)};groups={}
+    today=date.today().isoformat()
     for r in d['schedule']:
-        x=model_obj(d,r);x['status']='played' if (r['date'],r['home'],r['away']) in pk else ('upcoming' if r['date']>=date.today().isoformat() else 'past');groups.setdefault(r['round'],[]).append(x)
+        key=(r['date'],r['home'],r['away'])
+        status='played' if key in pk else ('upcoming' if r['date']>=today else 'past')
+        groups.setdefault(r['round'],[]).append({'date':r['date'],'time':r.get('time',''),'home':r['home'],'away':r['away'],'round':r['round'],'status':status})
     rows=[]
-    for n,ms in sorted(groups.items()):rows.append({'round':n,'status':'upcoming' if any(x['status']=='upcoming' for x in ms) else 'played' if all(x['status']=='played' for x in ms) else 'past','matches':ms})
+    for n,ms in sorted(groups.items()):
+        rows.append({'round':n,'status':'upcoming' if any(x['status']=='upcoming' for x in ms) else 'played' if all(x['status']=='played' for x in ms) else 'past','matches':ms})
     return jsonify(ok=True,rounds=rows)
+
+@app.get('/api/round/<int:n>')
+def api_round(n):
+    d=load()
+    ms=[r for r in d['schedule'] if int(r.get('round',0))==int(n)]
+    out=[]
+    for r in ms:
+        out.append(model_obj(d,r))
+    return jsonify(ok=True,round=n,matches=out)
 @app.get('/api/match')
 def api_match():
     d=load();h=request.args.get('home');a=request.args.get('away');dt=request.args.get('date');r=next((x for x in d['schedule'] if x['home']==h and x['away']==a and x['date']==dt),None)
