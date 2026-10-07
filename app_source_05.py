@@ -95,41 +95,68 @@ def player_history(team_id):
     return sorted(out,key=lambda x:x['minutes'],reverse=True)
 
 def player_props(d,r):
-    e=sofa_event_for(r);result={'available':False,'source':'SofaScore public endpoints','eventId':e.get('id') if e else None,'referee':(e or {}).get('referee',{}).get('name'),'players':[],'notes':[]}
+    e=sofa_event_for(r)
+    result={'available':bool(e),'source':'SofaScore public endpoints','eventId':e.get('id') if e else None,
+            'referee':(e or {}).get('referee',{}).get('name'),'players':[],'notes':[],'lineupsAvailable':False}
     if not e:
         result['notes'].append('Contesto giocatori non disponibile per questa partita; il modello non inventa dati.')
         return result
+
+    # Lineups are optional pre-match. Historical player data remains useful even
+    # before official lineups are published.
     lu=sofa_get(f"/event/{e['id']}/lineups",ttl=900)
-    if not lu:
-        result['notes'].append('Formazioni non ancora disponibili o endpoint non raggiungibile.')
-        return result
-    result['available']=True
-    for side,team in [('home',r['home']),('away',r['away'])]:
-        for p in player_stats_from_lineup(lu,side):
-            # current lineup is only used as a candidate list; history provides the rates
-            result['players'].append(dict(p,team=team,side=side))
-    # Historical player rates: aggregate recent finished matches for the two teams.
+    result['lineupsAvailable']=bool(lu)
     histories={}
+    team_ids={}
     for side in ('home','away'):
-        tid=e.get(side+'Team',{}).get('id')
-        if tid: histories[tid]={x['id']:x for x in player_history(tid)}
-    for p in result['players']:
-        tid=e.get(p['side']+'Team',{}).get('id'); hist=histories.get(tid,{}).get(p.get('id'))
+        tid=e.get(side+'Team',{}).get('id');team_ids[side]=tid
+        if tid: histories[side]={x['id']:x for x in player_history(tid)}
+
+    candidates=[]
+    if lu:
+        for side,team in [('home',r['home']),('away',r['away'])]:
+            for p in player_stats_from_lineup(lu,side):
+                candidates.append(dict(p,team=team,side=side))
+    else:
+        # No lineup yet: use the most-used players from the recent history.
+        for side,team in [('home',r['home']),('away',r['away'])]:
+            for p in sorted(histories.get(side,{}).values(),key=lambda x:x.get('minutes',0),reverse=True)[:15]:
+                candidates.append({'id':p.get('id'),'name':p.get('name'),'position':p.get('position'),
+                                   'substitute':False,'minutes':0,'team':team,'side':side,'lineupStatus':'non disponibile'})
+
+    for p in candidates:
+        hist=histories.get(p.get('side'),{}).get(p.get('id'))
         if not hist or hist.get('minutes',0)<120:
-            p['propCandidates']=[];continue
-        # Starters/substitutes are inferred from the lineup flag when available.
-        starter=not bool(p.get('substitute',False)); expected_min=78 if starter else 28
-        lf=max(0.05,(hist.get('fouls90') or 0)*expected_min/90)
-        lw=max(0.05,(hist.get('fouled90') or 0)*expected_min/90)
+            continue
+        starter=not bool(p.get('substitute',False))
+        expected_min=78 if starter else 28
+        p['history']={'apps':hist.get('apps'),'minutes':hist.get('minutes'),
+                      'fouls90':hist.get('fouls90'),'fouled90':hist.get('fouled90'),
+                      'shots90':hist.get('shots90'),'sot90':hist.get('sot90'),
+                      'cards90':hist.get('cards90'),'goals90':round((hist.get('goals') or 0)/(hist.get('minutes') or 1)*90,2),
+                      'assists90':round((hist.get('assists') or 0)/(hist.get('minutes') or 1)*90,2)}
         def prob_over(lam,line):
-            return 1-sum(pois(k,lam) for k in range(int(line)+1))
-        p['history']={'apps':hist.get('apps'),'minutes':hist.get('minutes'),'fouls90':hist.get('fouls90'),'fouled90':hist.get('fouled90'),'shots90':hist.get('shots90'),'cards90':hist.get('cards90')}
+            return max(0.0,min(1.0,1-sum(pois(k,lam) for k in range(int(line)+1))))
         props=[]
-        for label,lam in [('Falli commessi',lf),('Falli subiti',lw)]:
-            for line in (0.5,1.5,2.5):
-                props.append({'market':f'{label} O{line}','prob':round(prob_over(lam,line)*100,1),'lambda':round(lam,2),'basis':f'{hist.get("apps")} gare · {hist.get("fouls90") if label=="Falli commessi" else hist.get("fouled90")} per 90'})
-        p['propCandidates']=props
-    result['notes'].append('Le player-probability sono stime Poisson sui tassi recenti del giocatore e minuti attesi; non sono garanzie e vengono mostrate solo con storico sufficiente.')
+        rates=[('Falli commessi',hist.get('fouls90') or 0),('Falli subiti',hist.get('fouled90') or 0),
+               ('Tiri',hist.get('shots90') or 0),('Tiri in porta',hist.get('sot90') or 0),
+               ('Cartellini',hist.get('cards90') or 0),('Gol',p['history']['goals90']),('Assist',p['history']['assists90'])]
+        lines_by={'Falli commessi':(0.5,1.5,2.5),'Falli subiti':(0.5,1.5,2.5),
+                  'Tiri':(0.5,1.5,2.5),'Tiri in porta':(0.5,1.5),
+                  'Cartellini':(0.5,1.5),'Gol':(0.5,1.5),'Assist':(0.5,1.5)}
+        for label,rate in rates:
+            lam=max(0.01,rate*expected_min/90)
+            for line in lines_by[label]:
+                pr=prob_over(lam,line)
+                props.append({'market':f'{label} O{line}','prob':round(pr*100,1),'lambda':round(lam,2)})
+        p['expectedMinutes']=expected_min
+        p['propCandidates']=sorted(props,key=lambda x:x['prob'],reverse=True)
+        p['dataBasis']=f"{hist.get('apps')} gare · {hist.get('minutes')} minuti storici"
+        result['players'].append(p)
+
+    result['players']=sorted(result['players'],key=lambda x:(x['team'],-(x.get('history',{}).get('minutes') or 0)))
+    if not lu: result['notes'].append('Formazioni ufficiali non ancora disponibili: i giocatori sono selezionati dallo storico recente. Le stime diventano più affidabili quando la formazione è confermata.')
+    result['notes'].append('Le probabilità sono stime Poisson basate su tassi recenti e minuti attesi; non sono garanzie. Nessun dato viene inventato se lo storico è insufficiente.')
     return result
 
 def news():
