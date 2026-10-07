@@ -155,13 +155,44 @@ def refresh(force_stats=False):
         if fx:d['fixtures']=fx
         else:d['errors'].append('fixtures: provider returned 0 rows; previous data retained')
     except Exception as e:d['errors'].append(f'fixtures: {e} (previous data retained)')
-    # Merge any confirmed fixture date/time into the 380-match local calendar without changing its round mapping.
+    # Merge confirmed fixture date/time into the local calendar without changing round mapping.
+    # Football-Data can lag on future Serie A dates. API-Football is already used by the
+    # project for injuries/context, so use it as a second authoritative future-fixture
+    # source when the local API key is configured. This prevents SofaScore lookups from
+    # failing because a provisional/static date is off by one or more days.
     fx={(x['home'],x['away']):x for x in d.get('fixtures',[]) if x.get('div')=='I1'}
     for r in d.get('schedule',[]):
         x=fx.get((r['home'],r['away']))
         if x:
             if x.get('date'):r['date']=x['date']
             if x.get('time'):r['time']=x['time']
+
+    # Second pass: current-season API-Football fixtures. Only overwrite date/time
+    # when the same home/away pairing is found; never alter the round assignment.
+    try:
+        api_rows=api_football_season_fixtures() if API_FOOTBALL_KEY else []
+        api_map={}
+        for item in api_rows:
+            teams=item.get('teams') or {}
+            h=norm_team((teams.get('home') or {}).get('name'))
+            a=norm_team((teams.get('away') or {}).get('name'))
+            fd=item.get('fixture') or {}
+            raw_date=fd.get('date')
+            if not h or not a or not raw_date: continue
+            try:
+                z=datetime.fromisoformat(raw_date.replace('Z','+00:00'))
+                from zoneinfo import ZoneInfo
+                z=z.astimezone(ZoneInfo('Europe/Rome'))
+                api_map[(h,a)]={'date':z.date().isoformat(),'time':z.strftime('%H:%M')}
+            except Exception:
+                continue
+        for r in d.get('schedule',[]):
+            x=api_map.get((r['home'],r['away']))
+            if x:
+                r['date']=x['date']
+                if x.get('time'): r['time']=x['time']
+    except Exception as e:
+        d['errors'].append(f'api football fixtures merge: {e}')
     try: enrich_current_stats(d, force=force_stats)
     except Exception as e: d['errors'].append(f'stat enrichment: {e}')
     # Only write the cache after preserving/merging the last good dataset.
