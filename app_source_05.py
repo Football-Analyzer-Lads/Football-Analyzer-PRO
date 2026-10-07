@@ -187,7 +187,13 @@ def player_props(d,r):
                                    'substitute':False,'minutes':0,'team':team,'side':side,'lineupStatus':'non disponibile'})
 
     for p in candidates:
-        hist=histories.get(p.get('side'),{}).get(p.get('id'))
+        side_hist=histories.get(p.get('side'),{})
+        hist=side_hist.get(p.get('id'))
+        # SofaScore and API-Football use different player IDs. When the
+        # fallback provider is active, match the player by normalized name.
+        if not hist and p.get('name'):
+            pname=norm_team(p.get('name'))
+            hist=next((v for v in side_hist.values() if norm_team(v.get('name',''))==pname),None)
         if not hist or hist.get('minutes',0)<120:
             continue
         if lu:
