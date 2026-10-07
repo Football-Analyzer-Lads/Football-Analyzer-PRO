@@ -59,12 +59,27 @@ def sofa_get(path,ttl=21600,force=False):
         return None
 
 def sofa_event_for(r):
-    data=sofa_get('/sport/football/scheduled-events/'+r['date'],ttl=900)
-    if not data:return None
+    # Static calendars can lag behind the real fixture date. Search the target
+    # date and a small +/- 3 day window, then synchronize the record.
+    target=date.fromisoformat(r['date'])
     def nm(x):return norm_team(x)
-    for e in data.get('events',[]):
-        h=nm(e.get('homeTeam',{}).get('name'));a=nm(e.get('awayTeam',{}).get('name'))
-        if h==r['home'] and a==r['away']:return e
+    for delta in (0,-1,1,-2,2,-3,3):
+        day=(target+timedelta(days=delta)).isoformat()
+        data=sofa_get('/sport/football/scheduled-events/'+day,ttl=900)
+        if not data:continue
+        for e in data.get('events',[]):
+            h=nm(e.get('homeTeam',{}).get('name'));a=nm(e.get('awayTeam',{}).get('name'))
+            if h==r['home'] and a==r['away']:
+                r['date']=day
+                ts=e.get('startTimestamp')
+                if ts:
+                    try:
+                        from datetime import timezone
+                        from zoneinfo import ZoneInfo
+                        z=datetime.fromtimestamp(int(ts),tz=timezone.utc).astimezone(ZoneInfo('Europe/Rome'))
+                        r['time']=z.strftime('%H:%M')
+                    except Exception:pass
+                return e
     return None
 
 def player_stats_from_lineup(lineup,side):
