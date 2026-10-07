@@ -76,9 +76,16 @@ def player_stats_from_lineup(lineup,side):
     return rows
 
 def player_history(team_id):
-    data=sofa_get(f'/team/{team_id}/events/last/0',ttl=1800)
-    events=(data or {}).get('events',[])[:8];agg={}
-    for e in events:
+    # Prefer recent real match lineups. Read up to 24 finished matches so
+    # missing data on one match does not wipe the whole player history.
+    agg={};pages=[]
+    for page in (0,1):
+        data=sofa_get(f'/team/{team_id}/events/last/{page}',ttl=1800)
+        evs=(data or {}).get('events',[])
+        if not evs: break
+        pages.extend(evs)
+        if len(pages)>=24: break
+    for e in pages[:24]:
         if e.get('status',{}).get('type')!='finished':continue
         lu=sofa_get(f"/event/{e['id']}/lineups",ttl=7*86400)
         if not lu:continue
@@ -97,6 +104,39 @@ def player_history(team_id):
         a['avgMinutes']=round(a.get('minutes',0)/max(1,a.get('apps',0)),1);out.append(a)
     return sorted(out,key=lambda x:x['minutes'],reverse=True)
 
+def api_football_player_history(team_name):
+    # Fallback: real season-to-date player aggregates from API-Football.
+    try:
+        rows=api_football_season_fixtures() if API_FOOTBALL_KEY else []
+        target=norm_team(team_name); fixture=None
+        for fx in rows:
+            th=norm_team((fx.get('teams') or {}).get('home',{}).get('name',''))
+            ta=norm_team((fx.get('teams') or {}).get('away',{}).get('name',''))
+            if target in (th,ta):
+                fixture=fx;break
+        if not fixture:return []
+        th=norm_team((fixture.get('teams') or {}).get('home',{}).get('name',''))
+        tid=((fixture.get('teams') or {}).get('home',{}).get('id')
+             if target==th else (fixture.get('teams') or {}).get('away',{}).get('id'))
+        if not tid:return []
+        data=api_football_get(f'/players?league={API_FOOTBALL_LEAGUE}&season=2026&team={tid}&page=1',ttl=6*3600) or {}
+        out=[]
+        for row in data.get('response') or []:
+            p=row.get('player') or {}; st=(row.get('statistics') or [{}])[0]
+            g=st.get('games') or {}; mins=float(g.get('minutes') or 0); apps=int(g.get('appearences') or 0); starts=int(g.get('lineups') or 0)
+            if mins<120 or not p.get('id'):continue
+            shots=st.get('shots') or {}; fouls=st.get('fouls') or {}; cards=st.get('cards') or {}; goals=st.get('goals') or {}
+            a={'id':p.get('id'),'name':p.get('name'),'position':g.get('position'),
+               'minutes':mins,'apps':apps,'starts':starts,'fouls':fouls.get('committed') or 0,
+               'fouled':fouls.get('drawn') or 0,'shots':shots.get('total') or 0,'sot':shots.get('on') or 0,
+               'cards':cards.get('yellow') or 0,'goals':goals.get('total') or 0,'assists':goals.get('assists') or 0}
+            a['starterPct']=round(100*starts/max(1,apps),1);a['avgMinutes']=round(mins/max(1,apps),1)
+            a['fouls90']=round(a['fouls']/mins*90,2);a['fouled90']=round(a['fouled']/mins*90,2);a['shots90']=round(a['shots']/mins*90,2);a['sot90']=round(a['sot']/mins*90,2);a['cards90']=round(a['cards']/mins*90,2)
+            out.append(a)
+        return sorted(out,key=lambda x:x['minutes'],reverse=True)
+    except Exception:
+        return []
+
 def player_props(d,r):
     e=sofa_event_for(r)
     result={'available':bool(e),'source':'SofaScore public endpoints','eventId':e.get('id') if e else None,
@@ -113,7 +153,11 @@ def player_props(d,r):
     team_ids={}
     for side in ('home','away'):
         tid=e.get(side+'Team',{}).get('id');team_ids[side]=tid
-        if tid: histories[side]={x['id']:x for x in player_history(tid)}
+        if tid:
+            hist_rows=player_history(tid)
+            if len(hist_rows)<3 and API_FOOTBALL_KEY:
+                hist_rows=api_football_player_history(r[side])
+            histories[side]={x['id']:x for x in hist_rows}
 
     candidates=[]
     if lu:
