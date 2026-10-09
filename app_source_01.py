@@ -168,7 +168,7 @@ def refresh(force_stats=False):
             if x.get('time'):r['time']=x['time']
 
     # Second pass: current-season API-Football fixtures. Only overwrite date/time
-    # when the same home/away pairing is found; never alter the round assignment.
+    # when the same home/away pairing is found; never alter round assignment here.
     try:
         api_rows=api_football_season_fixtures() if API_FOOTBALL_KEY else []
         api_map={}
@@ -178,7 +178,7 @@ def refresh(force_stats=False):
             a=norm_team((teams.get('away') or {}).get('name'))
             fd=item.get('fixture') or {}
             raw_date=fd.get('date')
-            if not h or not a or not raw_date: continue
+            if not h or not a or not raw_date:continue
             try:
                 z=datetime.fromisoformat(raw_date.replace('Z','+00:00'))
                 from zoneinfo import ZoneInfo
@@ -190,14 +190,15 @@ def refresh(force_stats=False):
             x=api_map.get((r['home'],r['away']))
             if x:
                 r['date']=x['date']
-                if x.get('time'): r['time']=x['time']
-        # If the provider returned the full current Serie A season, rebuild the
-        # calendar from real fixtures. Merely changing dates on an old 380-match
-        # seed leaves relegated/promoted clubs (e.g. Venezia) in the new season.
+                if x.get('time'):r['time']=x['time']
+        # A stale 380-match seed can contain clubs no longer in Serie A.
+        # Rebuild only when the provider has returned a near-complete season.
         if len(api_rows)>=300:
             actual=[]
             for item in api_rows:
-                teams=item.get('teams') or {};fixture=item.get('fixture') or {};league=item.get('league') or {}
+                teams=item.get('teams') or {}
+                fixture=item.get('fixture') or {}
+                league=item.get('league') or {}
                 h=norm_team((teams.get('home') or {}).get('name',''))
                 a=norm_team((teams.get('away') or {}).get('name',''))
                 raw_date=fixture.get('date')
@@ -206,9 +207,15 @@ def refresh(force_stats=False):
                     z=datetime.fromisoformat(raw_date.replace('Z','+00:00'))
                     from zoneinfo import ZoneInfo
                     z=z.astimezone(ZoneInfo('Europe/Rome'))
-                except Exception:continue
-                rnd=str(league.get('round') or '')
-                m=re.search(r'(\\d+)\\s*    except Exception as e:
+                except Exception:
+                    continue
+                round_parts=re.findall(r'\d+',str(league.get('round') or ''))
+                if not round_parts:continue
+                actual.append({'date':z.date().isoformat(),'time':z.strftime('%H:%M'),
+                               'home':h,'away':a,'round':int(round_parts[-1])})
+            if len(actual)>=300:
+                d['schedule']=sorted(actual,key=lambda x:(x['round'],x['date'],x['home']))
+    except Exception as e:
         d['errors'].append(f'api football fixtures merge: {e}')
     try: enrich_current_stats(d, force=force_stats)
     except Exception as e: d['errors'].append(f'stat enrichment: {e}')
