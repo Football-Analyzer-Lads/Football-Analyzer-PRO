@@ -284,6 +284,7 @@ def player_props(d,r):
     lu=sofa_get(f"/event/{e['id']}/lineups",ttl=900) if e else None
     result['lineupsAvailable']=bool(lu)
     histories={}
+    history_diagnostics=[]
     for side in ('home','away'):
         tid=(e or {}).get(side+'Team',{}).get('id')
         # The fixture endpoint can miss a match even when team match histories
@@ -291,11 +292,17 @@ def player_props(d,r):
         # all foul/shot/card statistics just because the event was not found.
         if not tid:
             tid=sofa_team_id_for_name(r[side])
-        hist_rows=player_history(tid) if tid else []
+        sofa_rows=player_history(tid) if tid else []
+        hist_rows=sofa_rows
+        api_count=0
         if len(hist_rows)<3 and API_FOOTBALL_KEY:
             api_rows=api_football_player_history(r[side])
+            api_count=len(api_rows)
             if len(api_rows)>len(hist_rows):hist_rows=api_rows
         histories[side]={x['id']:x for x in hist_rows if x.get('id') is not None}
+        history_diagnostics.append(f"{r[side]}: ID SofaScore {'trovato' if tid else 'non trovato'}, storico SofaScore {len(sofa_rows)} giocatori, API-Football {api_count} giocatori")
+    if not any(histories.get(side) for side in ('home','away')):
+        result['notes'].append('Diagnostica storico: '+'; '.join(history_diagnostics)+f". API-Football key configurata: {'sì' if bool(API_FOOTBALL_KEY) else 'no'}. Ultimo stato API: {str(API_FOOTBALL_LAST_STATUS)[:240] if 'API_FOOTBALL_LAST_STATUS' in globals() else 'non disponibile'}.")
     if not e:
         result['notes'].append('SofaScore non ha restituito la partita: uso le probabili formazioni pubbliche e lo storico disponibile.')
     probable_candidates=[]
