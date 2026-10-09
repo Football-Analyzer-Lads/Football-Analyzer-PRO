@@ -296,7 +296,18 @@ def api_match():
     return jsonify(ok=True,match=obj)
 @app.get('/api/player-props')
 def api_player_props():
-    d=load();h=request.args.get('home');a=request.args.get('away');dt=request.args.get('date');r=next((x for x in d['schedule'] if x['home']==h and x['away']==a and x['date']==dt),None)
+    d=load();h=request.args.get('home');a=request.args.get('away');dt=request.args.get('date')
+    # Match by exact fixture first. If the local calendar has a provisional date,
+    # fall back to the same home/away pair and let sofa_event_for reconcile the date.
+    r=next((x for x in d['schedule'] if x['home']==h and x['away']==a and x['date']==dt),None)
+    if not r:
+        candidates=[x for x in d['schedule'] if x['home']==h and x['away']==a]
+        if candidates:
+            try:
+                target=date.fromisoformat(dt) if dt else date.today()
+                r=min(candidates,key=lambda x:abs((date.fromisoformat(x['date'])-target).days))
+            except Exception:
+                r=candidates[0]
     if not r:return jsonify(ok=False,error='Partita non trovata'),404
     return jsonify(ok=True,data=player_props(d,r))
 @app.get('/api/news')
