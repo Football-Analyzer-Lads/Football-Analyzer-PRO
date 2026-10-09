@@ -265,11 +265,12 @@ def player_props(d,r):
         histories[side]={x['id']:x for x in hist_rows if x.get('id') is not None}
     if not e:
         result['notes'].append('SofaScore non ha restituito la partita: uso le probabili formazioni pubbliche e lo storico disponibile.')
-    candidates=[]
+    probable_candidates=[]
     for side,team in [('home',r['home']),('away',r['away'])]:
         for pp in probable_lineup_for_team(team,probable):
-            candidates.append(dict(pp,team=team,side=side,fromProbableSource=True))
-    result['probableLineupsAvailable']=bool(candidates)
+            probable_candidates.append(dict(pp,team=team,side=side,fromProbableSource=True))
+    result['probableLineupsAvailable']=bool(probable_candidates)
+    candidates=[]
     if not any(histories.get(side) for side in ('home','away')) and not lu and not candidates:
         result['notes'].append('Nessun dato giocatori recuperabile. Verifica connessione e fonti dati.')
         return result
@@ -278,7 +279,9 @@ def player_props(d,r):
     if lu:
         for side,team in [('home',r['home']),('away',r['away'])]:
             for p in player_stats_from_lineup(lu,side):
-                candidates.append(dict(p,team=team,side=side))
+                candidates.append(dict(p,team=team,side=side,fromProbableSource=False))
+    elif probable_candidates:
+        candidates.extend(probable_candidates)
     else:
         # Include all source-listed starters and substitutes; add historical players only
         # when the probable-lineup feed has no data for that team.
