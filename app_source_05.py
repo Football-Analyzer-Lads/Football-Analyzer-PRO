@@ -331,6 +331,20 @@ def player_props(d,r):
         if not hist and p.get('name'):
             pname=norm_team(p.get('name'))
             hist=next((v for v in side_hist.values() if norm_team(v.get('name',''))==pname),None)
+            if not hist:
+                # Probable-lineup feeds often abbreviate first names (e.g.
+                # "Esposito F.P.") while statistics providers use full names.
+                # Match on a unique surname/token only; never pick arbitrarily
+                # when more than one historical player could match.
+                tokens=[t for t in re.findall(r'[a-z0-9]+',pname.lower()) if len(t)>2]
+                matches=[]
+                for v in side_hist.values():
+                    vname=norm_team(v.get('name','')).lower()
+                    vtokens=[t for t in re.findall(r'[a-z0-9]+',vname) if len(t)>2]
+                    if tokens and vtokens and (tokens[0] in vtokens or vtokens[-1] in tokens):
+                        matches.append(v)
+                if len(matches)==1:
+                    hist=matches[0]
         if not hist or hist.get('minutes',0)<120:
             if p.get('fromProbableSource'):
                 p['position']=p.get('position') or '—'
