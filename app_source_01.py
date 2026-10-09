@@ -132,7 +132,15 @@ def refresh(force_stats=False):
     # football-data/SofaScore is temporarily unreachable. This is especially
     # important on a new Mac where the first network/TLS request can fail.
     previous=_read_json(CACHE) or _seed_cache() or {}
-    base_schedule=previous.get('schedule') if len(previous.get('schedule',[]))==380 else STATIC_SCHEDULE
+    base_schedule=[dict(r) for r in (previous.get('schedule') if len(previous.get('schedule',[]))==380 else STATIC_SCHEDULE)]
+    # Apply explicitly corrected static dates/times to existing caches by team pair.
+    # Empty static times never erase a confirmed time already present in the cache.
+    static_by_pair={(norm_team(r['home']),norm_team(r['away'])):r for r in STATIC_SCHEDULE}
+    for r in base_schedule:
+        sr=static_by_pair.get((norm_team(r['home']),norm_team(r['away'])))
+        if sr and sr.get('time'):
+            r['date']=sr.get('date') or r.get('date')
+            r['time']=sr['time']
     d={'updated':datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
        'seasons':dict(previous.get('seasons',{})),
        'fixtures':list(previous.get('fixtures',[])),
@@ -160,11 +168,12 @@ def refresh(force_stats=False):
     # project for injuries/context, so use it as a second authoritative future-fixture
     # source when the local API key is configured. This prevents SofaScore lookups from
     # failing because a provisional/static date is off by one or more days.
-    fx={(x['home'],x['away']):x for x in d.get('fixtures',[]) if x.get('div')=='I1'}
+    fx={(norm_team(x['home']),norm_team(x['away'])):x for x in d.get('fixtures',[]) if x.get('div')=='I1'}
+    today_iso=date.today().isoformat()
     for r in d.get('schedule',[]):
-        x=fx.get((r['home'],r['away']))
-        if x:
-            if x.get('date'):r['date']=x['date']
+        x=fx.get((norm_team(r['home']),norm_team(r['away'])))
+        if x and x.get('date') and x['date']>=today_iso:
+            r['date']=x['date']
             if x.get('time'):r['time']=x['time']
 
     # Reconcile current-season calendar with API-Football. When the provider returns
@@ -351,7 +360,7 @@ def enrich_current_stats(d, force=False):
         r['data_quality']={'stats':'verified' if core_ok else 'partial','source':'SofaScore','event_id':ev.get('id'),'xg':'verified' if r.get('xgh') is not None and r.get('xga') is not None else 'unavailable'}
         if not core_ok:
             errors.append(f"{r['date']} {r['home']}-{r['away']}: incomplete SofaScore core stats")
-    d['validation']={'version':9,'checked_current_matches':checked,'stat_fields_enriched':changed,'source':'SofaScore current-season match statistics + Football-Data results/odds','errors':errors,'forced_refresh':bool(force)}
+    d['validation']={'version':10,'checked_current_matches':checked,'stat_fields_enriched':changed,'source':'SofaScore current-season match statistics + Football-Data results/odds','errors':errors,'forced_refresh':bool(force)}
     return d
 
 def load():
@@ -361,7 +370,7 @@ def load():
         d=json.load(open(CACHE,encoding='utf-8')) if os.path.exists(CACHE) else None
         if isinstance(d,dict) and len(d.get('schedule',[]))==380:
             age=time.time()-os.path.getmtime(CACHE)
-            if age >= 1200 or d.get('validation',{}).get('version')!=9:
+            if age >= 1200 or d.get('validation',{}).get('version')!=10:
                 _start_background_refresh(force_stats=False)
             return d
     except Exception:
