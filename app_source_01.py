@@ -369,6 +369,18 @@ def load():
     try:
         d=json.load(open(CACHE,encoding='utf-8')) if os.path.exists(CACHE) else None
         if isinstance(d,dict) and len(d.get('schedule',[]))==380:
+            # Apply the corrected known fixture dates immediately, even while a
+            # background refresh is running, so the UI never needs an extra wait.
+            static_by_pair={(norm_team(r['home']),norm_team(r['away'])):r for r in STATIC_SCHEDULE}
+            corrected=False
+            for r in d.get('schedule',[]):
+                sr=static_by_pair.get((norm_team(r['home']),norm_team(r['away'])))
+                if sr and sr.get('time') and (r.get('date')!=sr.get('date') or r.get('time')!=sr.get('time')):
+                    r['date']=sr['date'];r['time']=sr['time'];corrected=True
+            if corrected:
+                try:
+                    with open(CACHE,'w',encoding='utf-8') as f:json.dump(d,f,ensure_ascii=False)
+                except Exception:pass
             age=time.time()-os.path.getmtime(CACHE)
             if age >= 1200 or d.get('validation',{}).get('version')!=10:
                 _start_background_refresh(force_stats=False)
