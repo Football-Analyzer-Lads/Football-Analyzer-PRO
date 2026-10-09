@@ -74,7 +74,7 @@ def sofa_event_for(r):
             rh=nm(r.get('home'));ra=nm(r.get('away'))
             def equivalent(x,y):
                 if x==y:return True
-                strip=lambda s: re.sub(r'\\b(fc|cf|ssc|calcio|1907|1919|1927|1928|1912)\\b','',s).strip()
+                strip=lambda s: re.sub(r'\b(fc|cf|ssc|calcio|1907|1919|1927|1928|1912)\b','',s).strip()
                 return strip(x)==strip(y)
             if equivalent(h,rh) and equivalent(a,ra):
                 r['date']=day
@@ -127,19 +127,28 @@ def player_history(team_id):
     return sorted(out,key=lambda x:x['minutes'],reverse=True)
 
 def api_football_player_history(team_name):
-    # Fallback: real season-to-date player aggregates from API-Football.
+    # Fallback primario: risolvi direttamente la squadra via API-Football.
+    # Non dipendere dalla prima pagina del calendario, che può non contenere
+    # la squadra richiesta e lasciare il Player Analyzer completamente vuoto.
     try:
-        rows=api_football_season_fixtures() if API_FOOTBALL_KEY else []
-        target=norm_team(team_name); fixture=None
-        for fx in rows:
-            th=norm_team((fx.get('teams') or {}).get('home',{}).get('name',''))
-            ta=norm_team((fx.get('teams') or {}).get('away',{}).get('name',''))
-            if target in (th,ta):
-                fixture=fx;break
-        if not fixture:return []
-        th=norm_team((fixture.get('teams') or {}).get('home',{}).get('name',''))
-        tid=((fixture.get('teams') or {}).get('home',{}).get('id')
-             if target==th else (fixture.get('teams') or {}).get('away',{}).get('id'))
+        if not API_FOOTBALL_KEY:return []
+        target=norm_team(team_name)
+        team_data=api_football_get('/teams?name='+quote_plus(str(team_name))+'&league='+str(API_FOOTBALL_LEAGUE)+'&season=2026',ttl=24*3600) or {}
+        team_rows=team_data.get('response') or []
+        team_obj=next((x.get('team',{}) for x in team_rows
+                       if norm_team((x.get('team') or {}).get('name',''))==target),None)
+        if not team_obj and team_rows:
+            team_obj=(team_rows[0].get('team') or {})
+        tid=(team_obj or {}).get('id')
+        if not tid:
+            # Secondary fallback using any known fixture for the team.
+            for fx in api_football_season_fixtures():
+                th=norm_team((fx.get('teams') or {}).get('home',{}).get('name',''))
+                ta=norm_team((fx.get('teams') or {}).get('away',{}).get('name',''))
+                if target in (th,ta):
+                    tid=((fx.get('teams') or {}).get('home',{}).get('id') if target==th
+                         else (fx.get('teams') or {}).get('away',{}).get('id'))
+                    if tid:break
         if not tid:return []
         data=api_football_get(f'/players?league={API_FOOTBALL_LEAGUE}&season=2026&team={tid}&page=1',ttl=6*3600) or {}
         out=[]
@@ -161,25 +170,26 @@ def api_football_player_history(team_name):
 
 def player_props(d,r):
     e=sofa_event_for(r)
-    result={'available':bool(e),'source':'SofaScore public endpoints','eventId':e.get('id') if e else None,
+    result={'available':False,'source':'SofaScore + API-Football','eventId':e.get('id') if e else None,
             'referee':(e or {}).get('referee',{}).get('name'),'players':[],'notes':[],'lineupsAvailable':False}
-    if not e:
-        result['notes'].append('Contesto giocatori non disponibile per questa partita; il modello non inventa dati.')
-        return result
-
-    # Lineups are optional pre-match. Historical player data remains useful even
-    # before official lineups are published.
-    lu=sofa_get(f"/event/{e['id']}/lineups",ttl=900)
+    # SofaScore is the preferred source, but its scheduled-event endpoint can
+    # temporarily omit a fixture. In that case continue with API-Football
+    # historical player aggregates instead of returning an empty screen.
+    lu=sofa_get(f"/event/{e['id']}/lineups",ttl=900) if e else None
     result['lineupsAvailable']=bool(lu)
     histories={}
-    team_ids={}
     for side in ('home','away'):
-        tid=e.get(side+'Team',{}).get('id');team_ids[side]=tid
-        if tid:
-            hist_rows=player_history(tid)
-            if len(hist_rows)<3 and API_FOOTBALL_KEY:
-                hist_rows=api_football_player_history(r[side])
-            histories[side]={x['id']:x for x in hist_rows}
+        tid=(e or {}).get(side+'Team',{}).get('id')
+        hist_rows=player_history(tid) if tid else []
+        if len(hist_rows)<3 and API_FOOTBALL_KEY:
+            api_rows=api_football_player_history(r[side])
+            if len(api_rows)>len(hist_rows):hist_rows=api_rows
+        histories[side]={x['id']:x for x in hist_rows if x.get('id') is not None}
+    if not e:
+        result['notes'].append('SofaScore non ha restituito la partita: uso lo storico API-Football se disponibile.')
+    if not any(histories.get(side) for side in ('home','away')) and not lu:
+        result['notes'].append('Nessuno storico giocatore recuperabile dai provider per questa partita. Controlla la chiave API-Football e la connessione.')
+        return result
 
     candidates=[]
     if lu:
@@ -187,7 +197,7 @@ def player_props(d,r):
             for p in player_stats_from_lineup(lu,side):
                 candidates.append(dict(p,team=team,side=side))
     else:
-        # No lineup yet: use the most-used players from the recent history.
+        # No official lineup yet: show the most-used real players from history.
         for side,team in [('home',r['home']),('away',r['away'])]:
             for p in sorted(histories.get(side,{}).values(),key=lambda x:x.get('minutes',0),reverse=True)[:15]:
                 candidates.append({'id':p.get('id'),'name':p.get('name'),'position':p.get('position'),
@@ -196,8 +206,7 @@ def player_props(d,r):
     for p in candidates:
         side_hist=histories.get(p.get('side'),{})
         hist=side_hist.get(p.get('id'))
-        # SofaScore and API-Football use different player IDs. When the
-        # fallback provider is active, match the player by normalized name.
+        # Provider IDs differ; normalized name matching is the cross-provider fallback.
         if not hist and p.get('name'):
             pname=norm_team(p.get('name'))
             hist=next((v for v in side_hist.values() if norm_team(v.get('name',''))==pname),None)
@@ -215,13 +224,13 @@ def player_props(d,r):
                       'assists90':round((hist.get('assists') or 0)/(hist.get('minutes') or 1)*90,2)}
         def prob_over(lam,line):
             return max(0.0,min(1.0,1-sum(pois(k,lam) for k in range(int(line)+1))))
-        props=[]
         rates=[('Falli commessi',hist.get('fouls90') or 0),('Falli subiti',hist.get('fouled90') or 0),
                ('Tiri',hist.get('shots90') or 0),('Tiri in porta',hist.get('sot90') or 0),
                ('Cartellini',hist.get('cards90') or 0),('Gol',p['history']['goals90']),('Assist',p['history']['assists90'])]
         lines_by={'Falli commessi':(0.5,1.5,2.5),'Falli subiti':(0.5,1.5,2.5),
                   'Tiri':(0.5,1.5,2.5),'Tiri in porta':(0.5,1.5),
                   'Cartellini':(0.5,1.5),'Gol':(0.5,1.5),'Assist':(0.5,1.5)}
+        props=[]
         for label,rate in rates:
             lam=max(0.01,rate*expected_min/90)
             for line in lines_by[label]:
@@ -235,9 +244,10 @@ def player_props(d,r):
         p['dataBasis']=f"{hist.get('apps')} gare · {hist.get('starts',0)} da titolare · {hist.get('minutes')} minuti storici"
         result['players'].append(p)
 
+    result['available']=bool(e or result['players'])
     result['players']=sorted(result['players'],key=lambda x:(x['team'],-(x.get('history',{}).get('minutes') or 0)))
-    if not lu: result['notes'].append('Formazioni ufficiali non ancora disponibili: i giocatori sono selezionati dallo storico recente. Le stime diventano più affidabili quando la formazione è confermata.')
-    result['notes'].append('Le probabilità sono stime Poisson basate su tassi recenti e minuti attesi; non sono garanzie. Nessun dato viene inventato se lo storico è insufficiente.')
+    if not lu: result['notes'].append('Formazioni ufficiali non ancora disponibili: i giocatori sono selezionati dallo storico reale. Le stime migliorano quando la formazione è confermata.')
+    result['notes'].append('Le probabilità sono stime Poisson basate su tassi storici e minuti attesi; non sono garanzie e non vengono inventati dati.')
     return result
 
 def news():
