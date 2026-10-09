@@ -174,10 +174,82 @@ def api_football_player_history(team_name):
     except Exception:
         return []
 
+def fantacalcio_probable_lineups():
+    """Read public probable starters/substitutes and starter probabilities from Fantacalcio.it."""
+    from html.parser import HTMLParser
+    cache=_context_cache_load();key='fantacalcio_probable_lineups_v1';now=time.time();cached=cache.get(key)
+    if cached and now-cached.get('ts',0)<1800:
+        return cached.get('data') or {}
+    url='https://www.fantacalcio.it/probabili-formazioni-serie-a'
+    class LineupParser(HTMLParser):
+        def __init__(self):
+            super().__init__(convert_charrefs=True)
+            self.in_h3=False;self.h3=[];self.team=None;self.in_a=False;self.anchor=[]
+            self.last_player=None;self.bench=False;self.data={};self.updated=''
+        def handle_starttag(self,tag,attrs):
+            if tag.lower()=='h3':
+                self.in_h3=True;self.h3=[]
+            elif tag.lower()=='a' and self.team:
+                self.in_a=True;self.anchor=[]
+        def handle_endtag(self,tag):
+            if tag.lower()=='h3':
+                name=' '.join(' '.join(self.h3).split())
+                self.in_h3=False
+                norm=norm_team(name)
+                aliases={'ac milan':'milan','as roma':'roma','inter milan':'inter','ssc napoli':'napoli'}
+                norm=aliases.get(norm,norm)
+                known={norm_team(x) for x in ('Atalanta','Bologna','Cagliari','Como','Cremonese','Fiorentina','Genoa','Inter','Juventus','Lazio','Lecce','Milan','Napoli','Parma','Pisa','Roma','Sassuolo','Torino','Udinese','Venezia','Verona')}
+                self.team=norm if norm in known else None
+                self.bench=False;self.last_player=None
+            elif tag.lower()=='a' and self.in_a:
+                self.in_a=False
+                name=' '.join(' '.join(self.anchor).split())
+                if self.team and name and not name.endswith('%'):
+                    self.last_player=name
+        def handle_data(self,data):
+            if self.in_h3:self.h3.append(data)
+            if self.in_a:self.anchor.append(data)
+            if not self.team:return
+            txt=' '.join(data.split())
+            if txt.lower()=='panchina':
+                self.bench=True;self.last_player=None;return
+            m=re.fullmatch(r'(\d{1,3})\s*%',txt)
+            if m and self.last_player:
+                self.data.setdefault(self.team,[]).append({
+                    'name':self.last_player,'starterProbability':max(0,min(100,int(m.group(1)))),
+                    'substitute':self.bench,'lineupStatus':'Panchina' if self.bench else 'Titolare probabile'
+                })
+                self.last_player=None
+            if 'Ultimo aggiornamento' in txt:
+                self.updated=txt.replace('Ultimo aggiornamento','').strip()
+    try:
+        raw=get(url)
+        parser=LineupParser();parser.feed(raw.decode('utf-8','replace') if isinstance(raw,bytes) else str(raw))
+        data={'teams':parser.data,'updated':parser.updated,'source':url}
+        if sum(len(v) for v in parser.data.values())>=100:
+            cache[key]={'ts':now,'data':data};_context_cache_save(cache)
+            return data
+        if cached and cached.get('data'):return cached['data']
+        return data
+    except Exception:
+        return (cached or {}).get('data') or {}
+
+def probable_lineup_for_team(team_name, source_data):
+    target=norm_team(team_name)
+    aliases={'ac milan':'milan','as roma':'roma','inter milan':'inter','ssc napoli':'napoli'}
+    target=aliases.get(target,target)
+    for name,players in (source_data.get('teams') or {}).items():
+        if aliases.get(norm_team(name),norm_team(name))==target:
+            return players
+    return []
+
 def player_props(d,r):
     e=sofa_event_for(r)
-    result={'available':False,'source':'SofaScore + API-Football','eventId':e.get('id') if e else None,
-            'referee':(e or {}).get('referee',{}).get('name'),'players':[],'notes':[],'lineupsAvailable':False}
+    probable=fantacalcio_probable_lineups()
+    probable_updated=probable.get('updated')
+    result={'available':False,'source':'Fantacalcio.it + SofaScore + API-Football','eventId':e.get('id') if e else None,
+            'referee':(e or {}).get('referee',{}).get('name'),'players':[],'notes':[],'lineupsAvailable':False,
+            'probableLineupsAvailable':False,'probableLineupsUpdated':probable_updated,'probableLineupsSource':probable.get('source')}
     # SofaScore is the preferred source, but its scheduled-event endpoint can
     # temporarily omit a fixture. In that case continue with API-Football
     # historical player aggregates instead of returning an empty screen.
@@ -192,22 +264,29 @@ def player_props(d,r):
             if len(api_rows)>len(hist_rows):hist_rows=api_rows
         histories[side]={x['id']:x for x in hist_rows if x.get('id') is not None}
     if not e:
-        result['notes'].append('SofaScore non ha restituito la partita: uso lo storico API-Football se disponibile.')
-    if not any(histories.get(side) for side in ('home','away')) and not lu:
-        result['notes'].append('Nessuno storico giocatore recuperabile dai provider per questa partita. Controlla la chiave API-Football e la connessione.')
+        result['notes'].append('SofaScore non ha restituito la partita: uso le probabili formazioni pubbliche e lo storico disponibile.')
+    candidates=[]
+    for side,team in [('home',r['home']),('away',r['away'])]:
+        for pp in probable_lineup_for_team(team,probable):
+            candidates.append(dict(pp,team=team,side=side,fromProbableSource=True))
+    result['probableLineupsAvailable']=bool(candidates)
+    if not any(histories.get(side) for side in ('home','away')) and not lu and not candidates:
+        result['notes'].append('Nessun dato giocatori recuperabile. Verifica connessione e fonti dati.')
         return result
 
-    candidates=[]
+    
     if lu:
         for side,team in [('home',r['home']),('away',r['away'])]:
             for p in player_stats_from_lineup(lu,side):
                 candidates.append(dict(p,team=team,side=side))
     else:
-        # No official lineup yet: show the most-used real players from history.
+        # Include all source-listed starters and substitutes; add historical players only
+        # when the probable-lineup feed has no data for that team.
         for side,team in [('home',r['home']),('away',r['away'])]:
-            for p in sorted(histories.get(side,{}).values(),key=lambda x:x.get('minutes',0),reverse=True)[:15]:
+            if probable_lineup_for_team(team,probable):continue
+            for p in sorted(histories.get(side,{}).values(),key=lambda x:x.get('minutes',0),reverse=True)[:25]:
                 candidates.append({'id':p.get('id'),'name':p.get('name'),'position':p.get('position'),
-                                   'substitute':False,'minutes':0,'team':team,'side':side,'lineupStatus':'non disponibile'})
+                                   'substitute':False,'minutes':0,'team':team,'side':side,'lineupStatus':'Storico, probabile formazione non disponibile','starterProbability':float(p.get('starterPct') or 0),'fromProbableSource':False})
 
     for p in candidates:
         side_hist=histories.get(p.get('side'),{})
@@ -217,8 +296,18 @@ def player_props(d,r):
             pname=norm_team(p.get('name'))
             hist=next((v for v in side_hist.values() if norm_team(v.get('name',''))==pname),None)
         if not hist or hist.get('minutes',0)<120:
+            if p.get('fromProbableSource'):
+                p['position']=p.get('position') or '—'
+                p['starterProbability']=float(p.get('starterProbability') or 0)
+                p['expectedMinutes']=None
+                p['propCandidates']=[]
+                p['dataBasis']='Probabile formazione Fantacalcio.it; storico statistiche non disponibile'
+                result['players'].append(p)
             continue
-        if lu:
+        if p.get('fromProbableSource'):
+            starter_pct=float(p.get('starterProbability') or 0.0)
+            expected_min=max(5.0,min(90.0,float(hist.get('avgMinutes') or 0.0)))
+        elif lu:
             starter=not bool(p.get('substitute',False)); starter_pct=100.0 if starter else 0.0; expected_min=78 if starter else 28
         else:
             starter_pct=float(hist.get('starterPct') or 0.0); expected_min=max(5.0,min(90.0,float(hist.get('avgMinutes') or 0.0))); starter=starter_pct>=50.0
@@ -247,12 +336,14 @@ def player_props(d,r):
         p['propCandidates']=sorted(props,key=lambda x:x['prob'],reverse=True)
         p['foulProbability']=next((x['prob'] for x in props if x['market']=='Falli commessi O0.5'),None)
         p['cardProbability']=next((x['prob'] for x in props if x['market']=='Cartellini O0.5'),None)
-        p['dataBasis']=f"{hist.get('apps')} gare · {hist.get('starts',0)} da titolare · {hist.get('minutes')} minuti storici"
+        p['dataBasis']=(f"Fantacalcio.it · {hist.get('apps')} gare · {hist.get('starts',0)} da titolare · {hist.get('minutes')} minuti storici" if p.get('fromProbableSource') else f"{hist.get('apps')} gare · {hist.get('starts',0)} da titolare · {hist.get('minutes')} minuti storici")
         result['players'].append(p)
 
     result['available']=bool(e or result['players'])
-    result['players']=sorted(result['players'],key=lambda x:(x['team'],-(x.get('history',{}).get('minutes') or 0)))
-    if not lu: result['notes'].append('Formazioni ufficiali non ancora disponibili: i giocatori sono selezionati dallo storico reale. Le stime migliorano quando la formazione è confermata.')
+    result['players']=sorted(result['players'],key=lambda x:(x['team'],not bool(x.get('substitute')), -float(x.get('starterProbability') or 0),-(x.get('history',{}).get('minutes') or 0)))
+    if candidates and not lu:
+        result['notes'].append('Probabili formazioni e percentuali di titolarità da Fantacalcio.it; non sono formazioni ufficiali.'+(f' Ultimo aggiornamento fonte: {probable_updated}.' if probable_updated else ''))
+    elif not lu: result['notes'].append('Formazioni ufficiali non ancora disponibili: le stime migliorano quando la formazione è confermata.')
     result['notes'].append('Le probabilità sono stime Poisson basate su tassi storici e minuti attesi; non sono garanzie e non vengono inventati dati.')
     return result
 
