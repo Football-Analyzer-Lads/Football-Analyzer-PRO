@@ -374,20 +374,20 @@ def api_refresh():
 def api_matches():
     # Lightweight match index for the Player Analyzer. Do NOT run model_obj()
     # for every upcoming match during startup.
-    d=load();mp={(r['date'],r['home'],r['away']):r['round'] for r in d['schedule']}
+    d=load();mp={(norm_team(r['home']),norm_team(r['away'])):r['round'] for r in d['schedule']}
     out=[]
     for r in upcoming(d):
-        rr=dict(r);rr['round']=mp.get((r['date'],r['home'],r['away']));out.append(rr)
+        rr=dict(r);rr['round']=mp.get((norm_team(r['home']),norm_team(r['away'])),r.get('round'));out.append(rr)
     return jsonify(ok=True,matches=out)
 
 @app.get('/api/rounds')
 def api_rounds():
     # Lightweight calendar endpoint. Modeling is performed only for the
     # selected round through /api/round/<n>.
-    d=load();pk={(r['date'],r['home'],r['away']) for r in current(d)};groups={}
+    d=load();pk={(norm_team(r['home']),norm_team(r['away'])) for r in current(d)};groups={}
     today=date.today().isoformat()
     for r in d['schedule']:
-        key=(r['date'],r['home'],r['away'])
+        key=(norm_team(r['home']),norm_team(r['away']))
         status='played' if key in pk else ('upcoming' if r['date']>=today else 'past')
         groups.setdefault(r['round'],[]).append({'date':r['date'],'time':r.get('time',''),'home':r['home'],'away':r['away'],'round':r['round'],'status':status})
     rows=[]
