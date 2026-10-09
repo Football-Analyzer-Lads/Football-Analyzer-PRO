@@ -106,10 +106,25 @@ def _context_cache_save(c,path=CONTEXT_CACHE):
 
 def api_football_season_fixtures():
     if not API_FOOTBALL_KEY:return []
-    cache=_context_cache_load();key='season_fixtures_2026';now=time.time();v=cache.get(key)
-    if v and now-v.get('ts',0)<6*3600:return v.get('data',[])
-    data=api_football_get(f'/fixtures?league={API_FOOTBALL_LEAGUE}&season=2026',ttl=6*3600) or {}
-    rows=data.get('response') or []
+    # Cache versioned: older builds stored only page 1, which omitted many rounds.
+    cache=_context_cache_load();key='season_fixtures_2026_v2';now=time.time();v=cache.get(key)
+    if v and now-v.get('ts',0)<6*3600 and len(v.get('data',[]))>=300:return v.get('data',[])
+    first=api_football_get(f'/fixtures?league={API_FOOTBALL_LEAGUE}&season=2026&page=1',ttl=6*3600) or {}
+    rows=list(first.get('response') or [])
+    pagination=first.get('paging') or first.get('pagination') or {}
+    try:pages=min(30,max(1,int(pagination.get('total') or 1)))
+    except Exception:pages=1
+    for page in range(2,pages+1):
+        data=api_football_get(f'/fixtures?league={API_FOOTBALL_LEAGUE}&season=2026&page={page}',ttl=6*3600) or {}
+        page_rows=data.get('response') or []
+        if not page_rows:break
+        rows.extend(page_rows)
+    # Avoid replacing a useful cache with an incomplete provider response.
+    if len(rows)>=300:
+        cache[key]={'ts':now,'data':rows};_context_cache_save(cache)
+        return rows
+    old=cache.get(key,{}).get('data',[])
+    if len(old)>len(rows):return old
     cache[key]={'ts':now,'data':rows};_context_cache_save(cache);return rows
 
 def api_football_league_injuries():
