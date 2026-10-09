@@ -150,20 +150,26 @@ def api_football_player_history(team_name):
                          else (fx.get('teams') or {}).get('away',{}).get('id'))
                     if tid:break
         if not tid:return []
-        data=api_football_get(f'/players?league={API_FOOTBALL_LEAGUE}&season=2026&team={tid}&page=1',ttl=6*3600) or {}
-        out=[]
-        for row in data.get('response') or []:
-            p=row.get('player') or {}; st=(row.get('statistics') or [{}])[0]
-            g=st.get('games') or {}; mins=float(g.get('minutes') or 0); apps=int(g.get('appearences') or 0); starts=int(g.get('lineups') or 0)
-            if mins<120 or not p.get('id'):continue
-            shots=st.get('shots') or {}; fouls=st.get('fouls') or {}; cards=st.get('cards') or {}; goals=st.get('goals') or {}
-            a={'id':p.get('id'),'name':p.get('name'),'position':g.get('position'),
-               'minutes':mins,'apps':apps,'starts':starts,'fouls':fouls.get('committed') or 0,
-               'fouled':fouls.get('drawn') or 0,'shots':shots.get('total') or 0,'sot':shots.get('on') or 0,
-               'cards':cards.get('yellow') or 0,'goals':goals.get('total') or 0,'assists':goals.get('assists') or 0}
-            a['starterPct']=round(100*starts/max(1,apps),1);a['avgMinutes']=round(mins/max(1,apps),1)
-            a['fouls90']=round(a['fouls']/mins*90,2);a['fouled90']=round(a['fouled']/mins*90,2);a['shots90']=round(a['shots']/mins*90,2);a['sot90']=round(a['sot']/mins*90,2);a['cards90']=round(a['cards']/mins*90,2)
-            out.append(a)
+        # Fetch every available player page; the default page is only a partial roster.
+        out=[]; page=1
+        while page<=10:
+            data=api_football_get(f'/players?league={API_FOOTBALL_LEAGUE}&season=2026&team={tid}&page={page}',ttl=6*3600) or {}
+            rows=data.get('response') or []
+            if not rows:break
+            for row in rows:
+                p=row.get('player') or {}; st=(row.get('statistics') or [{}])[0]
+                g=st.get('games') or {}; mins=float(g.get('minutes') or 0); apps=int(g.get('appearences') or 0); starts=int(g.get('lineups') or 0)
+                if mins<120 or not p.get('id'):continue
+                shots=st.get('shots') or {}; fouls=st.get('fouls') or {}; cards=st.get('cards') or {}; goals=st.get('goals') or {}
+                a={'id':p.get('id'),'name':p.get('name'),'position':g.get('position'),
+                   'minutes':mins,'apps':apps,'starts':starts,'fouls':fouls.get('committed') or 0,
+                   'fouled':fouls.get('drawn') or 0,'shots':shots.get('total') or 0,'sot':shots.get('on') or 0,
+                   'cards':cards.get('yellow') or 0,'goals':goals.get('total') or 0,'assists':goals.get('assists') or 0}
+                a['starterPct']=round(100*starts/max(1,apps),1);a['avgMinutes']=round(mins/max(1,apps),1)
+                a['fouls90']=round(a['fouls']/mins*90,2);a['fouled90']=round(a['fouled']/mins*90,2);a['shots90']=round(a['shots']/mins*90,2);a['sot90']=round(a['sot']/mins*90,2);a['cards90']=round(a['cards']/mins*90,2)
+                out.append(a)
+            if len(rows)<20:break
+            page+=1
         return sorted(out,key=lambda x:x['minutes'],reverse=True)
     except Exception:
         return []
