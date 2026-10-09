@@ -351,7 +351,7 @@ def enrich_current_stats(d, force=False):
         r['data_quality']={'stats':'verified' if core_ok else 'partial','source':'SofaScore','event_id':ev.get('id'),'xg':'verified' if r.get('xgh') is not None and r.get('xga') is not None else 'unavailable'}
         if not core_ok:
             errors.append(f"{r['date']} {r['home']}-{r['away']}: incomplete SofaScore core stats")
-    d['validation']={'version':8,'checked_current_matches':checked,'stat_fields_enriched':changed,'source':'SofaScore current-season match statistics + Football-Data results/odds','errors':errors,'forced_refresh':bool(force)}
+    d['validation']={'version':9,'checked_current_matches':checked,'stat_fields_enriched':changed,'source':'SofaScore current-season match statistics + Football-Data results/odds','errors':errors,'forced_refresh':bool(force)}
     return d
 
 def load():
@@ -361,7 +361,7 @@ def load():
         d=json.load(open(CACHE,encoding='utf-8')) if os.path.exists(CACHE) else None
         if isinstance(d,dict) and len(d.get('schedule',[]))==380:
             age=time.time()-os.path.getmtime(CACHE)
-            if age >= 1200 or d.get('validation',{}).get('version')!=8:
+            if age >= 1200 or d.get('validation',{}).get('version')!=9:
                 _start_background_refresh(force_stats=False)
             return d
     except Exception:
