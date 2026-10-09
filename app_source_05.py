@@ -243,6 +243,34 @@ def probable_lineup_for_team(team_name, source_data):
             return players
     return []
 
+def sofa_team_id_for_name(team_name):
+    """Resolve a SofaScore team ID independently of the upcoming fixture event."""
+    target=norm_team(team_name)
+    aliases={'milan':'ac milan','as roma':'roma','ssc napoli':'napoli','internazionale':'inter'}
+    target=aliases.get(target.lower(),target)
+    cache=_context_cache_load();key='sofa_team_id_'+re.sub(r'[^a-z0-9]+','_',target.lower()).strip('_')
+    now=time.time();entry=cache.get(key)
+    if entry and now-entry.get('ts',0)<7*86400 and entry.get('id'):
+        return entry['id']
+    queries=[team_name,target]
+    for query in queries:
+        data=sofa_get('/search/all?q='+quote_plus(str(query)),ttl=7*86400) or {}
+        candidates=[]
+        for item in (data.get('teams') or []):
+            team=item.get('entity') if isinstance(item.get('entity'),dict) else item
+            name=norm_team(team.get('name',''))
+            short=norm_team(team.get('shortName',''))
+            if name==target or short==target or name.lower()==str(team_name).lower():
+                candidates.append(team)
+        if candidates:
+            team=candidates[0]
+            tid=team.get('id')
+            if tid:
+                cache[key]={'ts':now,'id':tid,'name':team.get('name')}
+                _context_cache_save(cache)
+                return tid
+    return None
+
 def player_props(d,r):
     e=sofa_event_for(r)
     probable=fantacalcio_probable_lineups()
@@ -258,6 +286,11 @@ def player_props(d,r):
     histories={}
     for side in ('home','away'):
         tid=(e or {}).get(side+'Team',{}).get('id')
+        # The fixture endpoint can miss a match even when team match histories
+        # are available. Resolve the club independently instead of abandoning
+        # all foul/shot/card statistics just because the event was not found.
+        if not tid:
+            tid=sofa_team_id_for_name(r[side])
         hist_rows=player_history(tid) if tid else []
         if len(hist_rows)<3 and API_FOOTBALL_KEY:
             api_rows=api_football_player_history(r[side])
