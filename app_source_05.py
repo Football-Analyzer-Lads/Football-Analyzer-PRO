@@ -69,7 +69,14 @@ def sofa_event_for(r):
         if not data:continue
         for e in data.get('events',[]):
             h=nm(e.get('homeTeam',{}).get('name'));a=nm(e.get('awayTeam',{}).get('name'))
-            if h==r['home'] and a==r['away']:
+            # Normalize both provider names and our schedule names; providers may
+            # append club suffixes such as "FC" or use alternate spellings.
+            rh=nm(r.get('home'));ra=nm(r.get('away'))
+            def equivalent(x,y):
+                if x==y:return True
+                strip=lambda s: re.sub(r'\\b(fc|cf|ssc|calcio|1907|1919|1927|1928|1912)\\b','',s).strip()
+                return strip(x)==strip(y)
+            if equivalent(h,rh) and equivalent(a,ra):
                 r['date']=day
                 ts=e.get('startTimestamp')
                 if ts:
