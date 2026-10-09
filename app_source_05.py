@@ -127,50 +127,49 @@ def player_history(team_id):
     return sorted(out,key=lambda x:x['minutes'],reverse=True)
 
 def api_football_player_history(team_name):
-    # Fallback primario: risolvi direttamente la squadra via API-Football.
-    # Non dipendere dalla prima pagina del calendario, che può non contenere
-    # la squadra richiesta e lasciare il Player Analyzer completamente vuoto.
+    """Return real per-player statistics, trying current and previous Serie A seasons."""
     try:
         if not API_FOOTBALL_KEY:return []
         target=norm_team(team_name)
-        team_data=api_football_get('/teams?name='+quote_plus(str(team_name))+'&league='+str(API_FOOTBALL_LEAGUE)+'&season=2026',ttl=24*3600) or {}
-        team_rows=team_data.get('response') or []
-        team_obj=next((x.get('team',{}) for x in team_rows
-                       if norm_team((x.get('team') or {}).get('name',''))==target),None)
-        if not team_obj and team_rows:
-            team_obj=(team_rows[0].get('team') or {})
-        tid=(team_obj or {}).get('id')
-        if not tid:
-            # Secondary fallback using any known fixture for the team.
-            for fx in api_football_season_fixtures():
-                th=norm_team((fx.get('teams') or {}).get('home',{}).get('name',''))
-                ta=norm_team((fx.get('teams') or {}).get('away',{}).get('name',''))
-                if target in (th,ta):
-                    tid=((fx.get('teams') or {}).get('home',{}).get('id') if target==th
-                         else (fx.get('teams') or {}).get('away',{}).get('id'))
-                    if tid:break
-        if not tid:return []
-        # Fetch every available player page; the default page is only a partial roster.
-        out=[]; page=1
-        while page<=10:
-            data=api_football_get(f'/players?league={API_FOOTBALL_LEAGUE}&season=2026&team={tid}&page={page}',ttl=6*3600) or {}
-            rows=data.get('response') or []
-            if not rows:break
-            for row in rows:
-                p=row.get('player') or {}; st=(row.get('statistics') or [{}])[0]
-                g=st.get('games') or {}; mins=float(g.get('minutes') or 0); apps=int(g.get('appearences') or 0); starts=int(g.get('lineups') or 0)
-                if mins<120 or not p.get('id'):continue
-                shots=st.get('shots') or {}; fouls=st.get('fouls') or {}; cards=st.get('cards') or {}; goals=st.get('goals') or {}
-                a={'id':p.get('id'),'name':p.get('name'),'position':g.get('position'),
-                   'minutes':mins,'apps':apps,'starts':starts,'fouls':fouls.get('committed') or 0,
-                   'fouled':fouls.get('drawn') or 0,'shots':shots.get('total') or 0,'sot':shots.get('on') or 0,
-                   'cards':cards.get('yellow') or 0,'goals':goals.get('total') or 0,'assists':goals.get('assists') or 0}
-                a['starterPct']=round(100*starts/max(1,apps),1);a['avgMinutes']=round(mins/max(1,apps),1)
-                a['fouls90']=round(a['fouls']/mins*90,2);a['fouled90']=round(a['fouled']/mins*90,2);a['shots90']=round(a['shots']/mins*90,2);a['sot90']=round(a['sot']/mins*90,2);a['cards90']=round(a['cards']/mins*90,2)
-                out.append(a)
-            if len(rows)<20:break
-            page+=1
-        return sorted(out,key=lambda x:x['minutes'],reverse=True)
+        for season in (2026,2025):
+            team_data=api_football_get('/teams?name='+quote_plus(str(team_name))+'&league='+str(API_FOOTBALL_LEAGUE)+'&season='+str(season),ttl=24*3600) or {}
+            team_rows=team_data.get('response') or []
+            team_obj=next((x.get('team',{}) for x in team_rows
+                           if norm_team((x.get('team') or {}).get('name',''))==target),None)
+            if not team_obj and team_rows:
+                team_obj=(team_rows[0].get('team') or {})
+            tid=(team_obj or {}).get('id')
+            if not tid:
+                for fx in api_football_season_fixtures():
+                    th=norm_team((fx.get('teams') or {}).get('home',{}).get('name',''))
+                    ta=norm_team((fx.get('teams') or {}).get('away',{}).get('name',''))
+                    if target in (th,ta):
+                        tid=((fx.get('teams') or {}).get('home',{}).get('id') if target==th
+                             else (fx.get('teams') or {}).get('away',{}).get('id'))
+                        if tid:break
+            if not tid:continue
+            out=[];page=1
+            while page<=10:
+                data=api_football_get(f'/players?league={API_FOOTBALL_LEAGUE}&season={season}&team={tid}&page={page}',ttl=6*3600) or {}
+                rows=data.get('response') or []
+                if not rows:break
+                for row in rows:
+                    p=row.get('player') or {}; st=(row.get('statistics') or [{}])[0]
+                    g=st.get('games') or {}; mins=float(g.get('minutes') or 0); apps=int(g.get('appearences') or 0); starts=int(g.get('lineups') or 0)
+                    if mins<120 or not p.get('id'):continue
+                    shots=st.get('shots') or {}; fouls=st.get('fouls') or {}; cards=st.get('cards') or {}; goals=st.get('goals') or {}
+                    a={'id':p.get('id'),'name':p.get('name'),'position':g.get('position'),
+                       'minutes':mins,'apps':apps,'starts':starts,'fouls':fouls.get('committed') or 0,
+                       'fouled':fouls.get('drawn') or 0,'shots':shots.get('total') or 0,'sot':shots.get('on') or 0,
+                       'cards':cards.get('yellow') or 0,'goals':goals.get('total') or 0,'assists':goals.get('assists') or 0,
+                       'historySeason':season}
+                    a['starterPct']=round(100*starts/max(1,apps),1);a['avgMinutes']=round(mins/max(1,apps),1)
+                    a['fouls90']=round(a['fouls']/mins*90,2);a['fouled90']=round(a['fouled']/mins*90,2);a['shots90']=round(a['shots']/mins*90,2);a['sot90']=round(a['sot']/mins*90,2);a['cards90']=round(a['cards']/mins*90,2)
+                    out.append(a)
+                if len(rows)<20:break
+                page+=1
+            if out:return sorted(out,key=lambda x:x['minutes'],reverse=True)
+        return []
     except Exception:
         return []
 
