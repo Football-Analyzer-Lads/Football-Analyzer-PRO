@@ -271,7 +271,7 @@ def player_props(d,r):
             probable_candidates.append(dict(pp,team=team,side=side,fromProbableSource=True))
     result['probableLineupsAvailable']=bool(probable_candidates)
     candidates=[]
-    if not any(histories.get(side) for side in ('home','away')) and not lu and not candidates:
+    if not any(histories.get(side) for side in ('home','away')) and not lu and not probable_candidates:
         result['notes'].append('Nessun dato giocatori recuperabile. Verifica connessione e fonti dati.')
         return result
 
