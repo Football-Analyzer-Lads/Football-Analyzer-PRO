@@ -167,8 +167,8 @@ def refresh(force_stats=False):
             if x.get('date'):r['date']=x['date']
             if x.get('time'):r['time']=x['time']
 
-    # Second pass: current-season API-Football fixtures. Only overwrite date/time
-    # when the same home/away pairing is found; never alter the round assignment.
+    # Reconcile current-season calendar with API-Football. When the provider returns
+    # a near-complete season, rebuild the schedule rather than retaining stale clubs.
     try:
         api_rows=api_football_season_fixtures() if API_FOOTBALL_KEY else []
         api_map={}
@@ -178,7 +178,7 @@ def refresh(force_stats=False):
             a=norm_team((teams.get('away') or {}).get('name'))
             fd=item.get('fixture') or {}
             raw_date=fd.get('date')
-            if not h or not a or not raw_date: continue
+            if not h or not a or not raw_date:continue
             try:
                 z=datetime.fromisoformat(raw_date.replace('Z','+00:00'))
                 from zoneinfo import ZoneInfo
@@ -187,10 +187,34 @@ def refresh(force_stats=False):
             except Exception:
                 continue
         for r in d.get('schedule',[]):
-            x=api_map.get((r['home'],r['away']))
+            x=api_map.get((norm_team(r['home']),norm_team(r['away'])))
             if x:
                 r['date']=x['date']
-                if x.get('time'): r['time']=x['time']
+                if x.get('time'):r['time']=x['time']
+        # Rebuild only with enough fixtures to avoid replacing the valid calendar
+        # with an API response that is truncated by quota or pagination.
+        if len(api_rows)>=300:
+            actual=[]
+            for item in api_rows:
+                teams=item.get('teams') or {}
+                fixture=item.get('fixture') or {}
+                league=item.get('league') or {}
+                h=norm_team((teams.get('home') or {}).get('name',''))
+                a=norm_team((teams.get('away') or {}).get('name',''))
+                raw_date=fixture.get('date')
+                if not h or not a or not raw_date:continue
+                try:
+                    z=datetime.fromisoformat(raw_date.replace('Z','+00:00'))
+                    from zoneinfo import ZoneInfo
+                    z=z.astimezone(ZoneInfo('Europe/Rome'))
+                except Exception:
+                    continue
+                round_parts=re.findall(r'\d+',str(league.get('round') or ''))
+                if not round_parts:continue
+                actual.append({'date':z.date().isoformat(),'time':z.strftime('%H:%M'),
+                               'home':h,'away':a,'round':int(round_parts[-1])})
+            if len(actual)>=300:
+                d['schedule']=sorted(actual,key=lambda x:(x['round'],x['date'],x['home']))
     except Exception as e:
         d['errors'].append(f'api football fixtures merge: {e}')
     try: enrich_current_stats(d, force=force_stats)
