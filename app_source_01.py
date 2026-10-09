@@ -381,15 +381,37 @@ def current(d):return [r for r in d.get('seasons',{}).get('2026/27',[]) if r.get
 def all_current(d):return d.get('seasons',{}).get('2026/27',[])
 def teams(d):return sorted({x for r in d.get('schedule',[]) for x in (r['home'],r['away'])})
 def upcoming(d):
-    today=date.today().isoformat(); played_keys={(r['date'],r['home'],r['away']) for r in current(d)};out=[]
-    for r in d['schedule']:
-        k=(r['date'],r['home'],r['away'])
-        if r['date']>=today and k not in played_keys:out.append(dict(r))
-    for r in d.get('fixtures',[]):
-        if r.get('div')=='I1' and r['date']>=today:
-            rr=dict(r);k=(rr['date'],rr['home'],rr['away'])
-            if k not in played_keys and not any(x['date']==rr['date'] and x['home']==rr['home'] and x['away']==rr['away'] for x in out):out.append(rr)
-    return sorted(out,key=lambda x:(x['date'],x.get('time',''),x['home']))
+    # Merge by home/away pair, not by date: the same fixture may appear with
+    # different provisional dates in the static calendar and external feed.
+    today=date.today().isoformat()
+    played_pairs={(norm_team(r['home']),norm_team(r['away'])) for r in current(d)}
+    fixtures={}
+    for x in d.get('fixtures',[]):
+        if x.get('div')=='I1':
+            fixtures[(norm_team(x.get('home')),norm_team(x.get('away')))]=x
+    schedule_by_pair={}
+    for r in d.get('schedule',[]):
+        pair=(norm_team(r['home']),norm_team(r['away']))
+        rr=dict(r)
+        fx=fixtures.get(pair)
+        # Prefer a current/future date from the live fixture feed, but never let
+        # an old/stale fixture date hide a match from the season calendar.
+        if fx and fx.get('date') and fx['date']>=today:
+            rr['date']=fx['date']
+            if fx.get('time'):rr['time']=fx['time']
+        if pair not in played_pairs and rr.get('date','')>=today:
+            schedule_by_pair[pair]=rr
+    # Include provider fixtures absent from the local calendar, but keep a known
+    # round number whenever the home/away pair is present in the 380-match list.
+    for x in d.get('fixtures',[]):
+        if x.get('div')!='I1' or not x.get('date') or x['date']<today:continue
+        pair=(norm_team(x.get('home')),norm_team(x.get('away')))
+        if pair in played_pairs or pair in schedule_by_pair:continue
+        rr=dict(x)
+        schedule_match=next((z for z in d.get('schedule',[]) if (norm_team(z['home']),norm_team(z['away']))==pair),None)
+        if schedule_match:rr['round']=schedule_match.get('round')
+        schedule_by_pair[pair]=rr
+    return sorted(schedule_by_pair.values(),key=lambda x:(x['date'],x.get('time',''),x['home']))
 
 def stats_verified(r):
     # Core match statistics are available directly from Football-Data (HS/AS,
