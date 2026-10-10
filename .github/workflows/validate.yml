@@ -13,8 +13,16 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Compile Python sources
-        run: python -m py_compile app.py app_source_01.py app_source_02.py app_source_03.py app_source_04.py app_source_05.py
+      - name: Compile assembled Python application
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          parts = sorted(Path(".").glob("app_source_*.py"))
+          source = "\\n".join(p.read_text(encoding="utf-8").rstrip("\\n") for p in parts) + "\\n"
+          compile(source, str(parts[0]), "exec")
+          compile(Path("app.py").read_text(encoding="utf-8"), "app.py", "exec")
+          print("Assembled application syntax: OK")
+          PY
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
