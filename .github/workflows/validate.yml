@@ -18,7 +18,7 @@ jobs:
           python - <<'PY'
           from pathlib import Path
           parts = sorted(Path(".").glob("app_source_*.py"))
-          source = "\n".join(p.read_text(encoding="utf-8").rstrip("\n") for p in parts) + "\n"
+          source = chr(10).join(p.read_text(encoding="utf-8").rstrip(chr(10)) for p in parts) + chr(10)
           compile(source, str(parts[0]), "exec")
           compile(Path("app.py").read_text(encoding="utf-8"), "app.py", "exec")
           print("Assembled application syntax: OK")
