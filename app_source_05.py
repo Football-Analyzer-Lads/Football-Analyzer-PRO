@@ -479,11 +479,18 @@ def player_props(d,r):
             if not hist:
                 # Fantacalcio abbreviates first names in probable lineups (e.g. Esposito F.P.).
                 # Match only a unique shared surname/token to avoid assigning another player.
-                tokens=[t for t in pname.split() if len(t)>2]
+                name_parts=pname.split()
+                tokens=[t for t in name_parts if len(t)>2]
+                initials=[t for t in name_parts if len(t)<=2]
                 matches=[]
                 for v in side_hist.values():
-                    vtokens=[t for t in _player_name_key(v.get('name')).split() if len(t)>2]
-                    if tokens and vtokens and tokens[-1] in vtokens:
+                    vtokens=_player_name_key(v.get('name')).split()
+                    long_tokens=[t for t in vtokens if len(t)>2]
+                    if tokens and long_tokens and tokens[-1] in long_tokens:
+                        # Probable lineup abbreviations can include initials after the surname:
+                        # "Martinez Jo." or "Esposito F.P.". Use those initials to disambiguate.
+                        if initials and not all(any(full.startswith(initial) for full in long_tokens if full!=tokens[-1]) for initial in initials):
+                            continue
                         matches.append(v)
                 # Deduplicate same player when both providers contain a row.
                 unique={}
@@ -546,7 +553,7 @@ def player_props(d,r):
     elif not lu: result['notes'].append('Formazioni ufficiali non ancora disponibili: le stime migliorano quando la formazione è confermata.')
     matched=sum(1 for item in result['players'] if item.get('history'))
     probable_count=len(probable_candidates)
-    result['notes'].append(f"Storico giocatori trovato: {matched}/{probable_count if probable_count else len(result['players'])}. "+('API-Football attiva come fonte storica.' if API_FOOTBALL_KEY else 'API-Football non configurata: dipendenza dallo storico SofaScore.')+' Diagnostica: '+'; '.join(history_diagnostics)+'.')
+    result['notes'].append(f"Storico giocatori trovato: {matched}/{probable_count if probable_count else len(result['players'])}. "+('API-Football attiva come fonte storica.' if API_FOOTBALL_KEY else 'API-Football non configurata: dipendenza dallo storico SofaScore.')+' Diagnostica: '+'; '.join(history_diagnostics)+'.'+(f" Ultimo stato API-Football: {str(API_FOOTBALL_LAST_STATUS)[:220]}." if API_FOOTBALL_KEY and matched < (probable_count or len(result['players'])) else ''))
     result['notes'].append('Le probabilità sono stime Poisson basate su tassi storici e minuti attesi; non sono garanzie e non vengono inventati dati.')
     return result
 
