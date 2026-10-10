@@ -729,11 +729,13 @@ def player_props(d,r):
         result['pitchAPIStatus']={'configured':bool(PITCHAPI_API_KEY),'ok':None,'error':None}
     histories={}
     history_diagnostics=[]
+    pitch_history_count=0
     for side in ('home','away'):
         tid=(e or {}).get(side+'Team',{}).get('id')
         if not tid:tid=sofa_team_id_for_name(r[side])
         sofa_rows=player_history(tid) if tid else []
         pitch_rows=pitchapi_player_history(r[side],target_date=r.get('date'),limit=8) if PITCHAPI_API_KEY else []
+        pitch_history_count+=len(pitch_rows)
         api_rows=api_football_player_history(r[side]) if API_FOOTBALL_KEY else []
         side_rows={}
         # Prefer PitchAPI first: its match-level data is consistent across the last
@@ -869,7 +871,8 @@ def player_props(d,r):
     matched=sum(1 for item in result['players'] if item.get('history'))
     probable_count=len(probable_candidates)
     if PITCHAPI_API_KEY:
-        result['pitchAPIStatus']={'configured':True,'ok':any('PitchAPI' in row for row in history_diagnostics),
+        result['pitchAPIStatus']={'configured':True,'ok':pitch_history_count>0 or bool(result.get('liveMatch',{}).get('isLive')),
+                                  'playersFound':pitch_history_count,
                                   'error':PITCHAPI_LAST_ERROR or PITCHAPI_LAST_STATUS.get('error'),
                                   'diagnostics':history_diagnostics}
     result['notes'].append(f"Storico giocatori trovato: {matched}/{probable_count if probable_count else len(result['players'])}. "+('PitchAPI configurata come fonte principale.' if PITCHAPI_API_KEY else 'PitchAPI non configurata.')+' Diagnostica: '+'; '.join(history_diagnostics)+'.'+(f" Stato PitchAPI: {str(PITCHAPI_LAST_STATUS)[:220]}." if PITCHAPI_API_KEY and matched < (probable_count or len(result['players'])) else '')+(f" Stato API-Football: {str(API_FOOTBALL_LAST_STATUS)[:180]}." if API_FOOTBALL_KEY and matched < (probable_count or len(result['players'])) else ''))
