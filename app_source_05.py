@@ -832,23 +832,33 @@ def player_props(d,r):
             starter=not bool(p.get('substitute',False)); starter_pct=100.0 if starter else 0.0; expected_min=78 if starter else 28
         else:
             starter_pct=float(hist.get('starterPct') or 0.0); expected_min=max(5.0,min(90.0,float(hist.get('avgMinutes') or 0.0))); starter=starter_pct>=50.0
+        def per90(field):
+            # Prefer provider-calculated rates; derive a rate only when its raw
+            # total is actually present. Missing is not zero.
+            direct=hist.get(field+'90')
+            if direct is not None:return float(direct)
+            total=hist.get(field);mins=hist.get('minutes')
+            if total is None or mins is None or _stat_float(mins)<=0:return None
+            return round(_stat_float(total)/_stat_float(mins)*90,2)
         p['history']={'apps':hist.get('apps'),'starts':hist.get('starts'),'minutes':hist.get('minutes'),
                       'starterPct':starter_pct,'avgMinutes':hist.get('avgMinutes'),
-                      'fouls90':hist.get('fouls90'),'fouled90':hist.get('fouled90'),
-                      'shots90':hist.get('shots90'),'sot90':hist.get('sot90'),
-                      'cards90':hist.get('cards90'),'goals90':round((hist.get('goals') or 0)/(hist.get('minutes') or 1)*90,2),
-                      'assists90':round((hist.get('assists') or 0)/(hist.get('minutes') or 1)*90,2)}
+                      'fouls90':per90('fouls'),'fouled90':per90('fouled'),
+                      'shots90':per90('shots'),'sot90':per90('sot'),
+                      'cards90':per90('cards'),'goals90':per90('goals'),
+                      'assists90':per90('assists'),'xg90':per90('xg')}
         def prob_over(lam,line):
             return max(0.0,min(1.0,1-sum(pois(k,lam) for k in range(int(line)+1))))
-        rates=[('Falli commessi',hist.get('fouls90') or 0),('Falli subiti',hist.get('fouled90') or 0),
-               ('Tiri',hist.get('shots90') or 0),('Tiri in porta',hist.get('sot90') or 0),
-               ('Cartellini',hist.get('cards90') or 0),('Gol',p['history']['goals90']),('Assist',p['history']['assists90'])]
+        rates=[('Falli commessi',p['history']['fouls90']),('Falli subiti',p['history']['fouled90']),
+               ('Tiri',p['history']['shots90']),('Tiri in porta',p['history']['sot90']),
+               ('Cartellini',p['history']['cards90']),('Gol',p['history']['goals90']),('Assist',p['history']['assists90'])]
         lines_by={'Falli commessi':(0.5,1.5,2.5),'Falli subiti':(0.5,1.5,2.5),
                   'Tiri':(0.5,1.5,2.5),'Tiri in porta':(0.5,1.5),
                   'Cartellini':(0.5,1.5),'Gol':(0.5,1.5),'Assist':(0.5,1.5)}
         props=[]
         for label,rate in rates:
-            lam=max(0.01,rate*expected_min/90)
+            # Do not manufacture a 0.0 rate where the provider supplied no value.
+            if rate is None:continue
+            lam=max(0.0,float(rate)*expected_min/90)
             for line in lines_by[label]:
                 pr=prob_over(lam,line)
                 props.append({'market':f'{label} O{line}','prob':round(pr*100,1),'lambda':round(lam,2)})
