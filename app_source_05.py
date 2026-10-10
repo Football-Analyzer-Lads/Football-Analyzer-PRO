@@ -612,9 +612,16 @@ def pitchapi_player_history(team_name,target_date=None,limit=12):
     team_key=_pitchapi_team_key(team_name)
     cache=_context_cache_load();cache_key='pitchapi_player_history:'+team_key+':'+target_date
     now=time.time();cached=cache.get(cache_key)
-    if cached and now-cached.get('ts',0)<6*3600 and isinstance(cached.get('data'),list):
-        PITCHAPI_LAST_STATUS={'configured':True,'ok':True,'cached_history':True,'team':team_name,'players':len(cached['data'])}
-        return cached['data']
+    if cached and isinstance(cached.get('data'),list):
+        cached_rows=cached.get('data') or []
+        cached_ttl=6*3600 if cached_rows else 300
+        if now-cached.get('ts',0)<cached_ttl:
+            PITCHAPI_LAST_STATUS={'configured':True,'ok':bool(cached_rows),'cached_history':True,
+                'team':team_name,'players':len(cached_rows),
+                'error':None if cached_rows else 'Nessun dato giocatore restituito da PitchAPI nelle ultime 5 minuti'}
+            if not cached_rows:PITCHAPI_LAST_ERROR=PITCHAPI_LAST_STATUS['error']
+            else:PITCHAPI_LAST_ERROR=''
+            return cached_rows
     league=pitchapi_serie_a()
     if not league:return []
     matches_by_id={}
@@ -983,12 +990,29 @@ def api_pitchapi_status():
             'error':PITCHAPI_LAST_ERROR or PITCHAPI_LAST_STATUS.get('error') or PITCHAPI_LAST_STATUS})
     played=pitchapi_league_matches(league['id'],league['season'],status='played')
     upcoming=pitchapi_league_matches(league['id'],league['season'],status='upcoming')
-    ok=bool(played or upcoming)
+    sample={'playerRows':0,'match':None,'ok':False}
+    # Also test an actual match/player-stat endpoint; a league listing alone is not
+    # enough to consider the integration healthy.
+    for m in sorted(played,key=lambda x:str(x.get('date') or ''),reverse=True)[:3]:
+        mid=m.get('id')
+        if not mid:continue
+        rows=pitchapi_get('/matches/'+str(mid)+'/players',ttl=30*86400)
+        if isinstance(rows,list) and rows:
+            sample={'playerRows':len(rows),'match':str((m.get('home_team') or {}).get('name',''))+' - '+str((m.get('away_team') or {}).get('name','')),
+                    'matchId':mid,'ok':True}
+            break
+    ok=bool(played or upcoming) and sample['ok']
+    if sample['ok']:
+        message='Connessione e statistiche individuali PitchAPI verificate.'
+    elif played or upcoming:
+        message='Chiave e campionato raggiungibili, ma il test non ha trovato statistiche individuali nelle ultime partite campione.'
+    else:
+        message='Serie A trovata, ma la lista partite è vuota. Controlla stagione/copertura.'
     return jsonify(ok=True,data={'configured':True,'ok':ok,'league':league['name'],
         'leagueId':league['id'],'season':league['season'],'playedMatches':len(played),
-        'upcomingMatches':len(upcoming),'message':'Connessione PitchAPI verificata.' if ok else
-        'Serie A trovata, ma la lista partite è vuota. Controlla stagione/copertura.',
-        'providerStatus':PITCHAPI_LAST_STATUS,'error':PITCHAPI_LAST_ERROR or None})
+        'upcomingMatches':len(upcoming),'playerRows':sample['playerRows'],'sampleMatch':sample.get('match'),
+        'message':message,'providerStatus':PITCHAPI_LAST_STATUS,
+        'error':None if sample['ok'] else PITCHAPI_LAST_ERROR or PITCHAPI_LAST_STATUS.get('error')})
 @app.get('/api/news')
 def api_news():return jsonify(ok=True,items=news())
 
