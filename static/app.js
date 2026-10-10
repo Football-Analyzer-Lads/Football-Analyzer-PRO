@@ -79,6 +79,7 @@ try{
 const j=await api('/api/player-props?date='+encodeURIComponent(x.date)+'&home='+encodeURIComponent(x.home)+'&away='+encodeURIComponent(x.away));
 const d=j.data;const live=d.liveMatch||{};
 $('playerContext').innerHTML='<h3>'+x.home+' – '+x.away+'</h3><p>Fonte: '+(d.source||'')+' · arbitro: '+(d.referee||'non disponibile')+' · Probabili formazioni: '+(d.probableLineupsAvailable?'disponibili':'non disponibili')+' · Ufficiali: '+(d.lineupsAvailable?'disponibili':'non ancora disponibili')+' · Aggiornamento: '+(d.probableLineupsUpdated||'non indicato')+'</p><p class="muted">'+(d.notes||[]).join(' ')+'</p>';
+if(live.reason==='API_FOOTBALL_KEY non configurata')$('playerContext').innerHTML+='<p class="muted">Per attivare i dati live, configura API_FOOTBALL_KEY nel file config.env. Non incollare la chiave in chat.</p>';
 const liveText=v=>v===null||v===undefined||v===''?'—':String(v);
 const liveEsc=v=>liveText(v).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 let livePanel='';
