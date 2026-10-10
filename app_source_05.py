@@ -413,6 +413,7 @@ def pitchapi_get(path,ttl=3600,force=False):
         return None
     cache=_context_cache_load();key='pitchapi:v1:'+path;now=time.time();v=cache.get(key)
     if not force and v and now-v.get('ts',0)<ttl:
+        PITCHAPI_LAST_ERROR=''
         PITCHAPI_LAST_STATUS={'configured':True,'ok':True,'cached':True,'path':path,'http':200}
         return v.get('data')
     try:
