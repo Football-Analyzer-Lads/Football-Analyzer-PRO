@@ -280,7 +280,7 @@ def api_football_live_match_data(r):
         today=date.today().isoformat()
         if r.get('date') != today:
             return {'available':False,'reason':'La partita selezionata non è in data odierna'}
-        payload=api_football_get(f'/fixtures?live=all&league={API_FOOTBALL_LEAGUE}&season={today[:4]}',ttl=90) or {}
+        payload=api_football_get(f'/fixtures?live={API_FOOTBALL_LEAGUE}',ttl=90) or {}
         live_fixtures=payload.get('response') or []
         def team_key(value):
             s=norm_team(str(value or '')).lower()
