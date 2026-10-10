@@ -109,6 +109,8 @@ if(testPitchApi){
         d.season?('Stagione: '+d.season):'',
         d.playedMatches!=null?('Partite concluse disponibili: '+d.playedMatches):'',
         d.upcomingMatches!=null?('Partite future disponibili: '+d.upcomingMatches):'',
+        d.sampleMatch?('Partita campione: '+d.sampleMatch):'',
+        d.playerRows!=null?('Giocatori restituiti dall’endpoint: '+d.playerRows):'',
         d.error?('Dettaglio errore: '+(typeof d.error==='string'?d.error:JSON.stringify(d.error))):''
       ].filter(Boolean);
       $('playerContext').innerHTML='<h3>Test PitchAPI · '+state+'</h3><p>'+details.map(s=>String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')).join('<br>')+'</p><p class="muted">Quando la connessione è attiva, clicca “Analizza giocatori” per recuperare lo storico della partita selezionata.</p>';
