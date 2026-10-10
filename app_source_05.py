@@ -673,6 +673,40 @@ def pitchapi_player_history(team_name,target_date=None,limit=12):
             for sp in side_data.get('starters') or []:
                 if sp.get('player_id') is not None:started.add(str(sp.get('player_id')))
                 if sp.get('name'):started.add('name:'+_player_name_key(sp.get('name')))
+        # The provider also exposes canonical per-shot data and match events.
+        # Use these as metric fallbacks only when the player-stat row omits a field.
+        shot_data=pitchapi_get('/matches/'+str(mid)+'/shots',ttl=30*86400)
+        shot_feed_available=isinstance(shot_data,dict) and isinstance(shot_data.get('periods'),list)
+        shot_counts={};sot_counts={};shot_xg={}
+        if shot_feed_available:
+            for period in shot_data.get('periods') or []:
+                for shot in period.get('shots') or []:
+                    shot_player=shot.get('player') or {}
+                    shot_team=shot.get('team_id')
+                    if wanted_id is not None and shot_team!=wanted_id:continue
+                    sid=str(shot_player.get('id') or '')
+                    sname=_player_name_key(shot_player.get('name'))
+                    keys=[('id',sid)] if sid else []
+                    if sname:keys.append(('name',sname))
+                    for kind,pk in keys:
+                        shot_counts[(kind,pk)]=shot_counts.get((kind,pk),0)+1
+                        if shot.get('is_on_target') is True:
+                            sot_counts[(kind,pk)]=sot_counts.get((kind,pk),0)+1
+                        xg_value=_pitchapi_num(shot.get('expected_goals'))
+                        if xg_value is not None:shot_xg[(kind,pk)]=shot_xg.get((kind,pk),0.0)+xg_value
+        event_data=pitchapi_get('/matches/'+str(mid)+'/events',ttl=30*86400)
+        events_feed_available=isinstance(event_data,dict) and isinstance(event_data.get('events'),list)
+        yellow_counts={}
+        if events_feed_available:
+            for event in event_data.get('events') or []:
+                etype=re.sub(r'[^a-z0-9]+','',str(event.get('event_type') or '').lower())
+                if etype!='yellowcard':continue
+                if wanted_id is not None and event.get('team_id')!=wanted_id:continue
+                player=event.get('player') or {}
+                pid_event=str(player.get('id') or '')
+                pname_event=_player_name_key(player.get('name'))
+                if pid_event:yellow_counts[('id',pid_event)]=yellow_counts.get(('id',pid_event),0)+1
+                if pname_event:yellow_counts[('name',pname_event)]=yellow_counts.get(('name',pname_event),0)+1
         for row in raw:
             if wanted_id is not None and row.get('team_id')!=wanted_id:continue
             p=row.get('player') or {}
@@ -702,6 +736,16 @@ def pitchapi_player_history(team_name,target_date=None,limit=12):
             }
             for field,(keys,labels) in metric_keys.items():
                 val=_pitchapi_num(_pitchapi_pick(stats,keys,labels))
+                lookup_id=('id',pid);lookup_name=('name',_player_name_key(pname))
+                if val is None:
+                    if field=='shots' and shot_feed_available:
+                        val=shot_counts.get(lookup_id,shot_counts.get(lookup_name,0))
+                    elif field=='sot' and shot_feed_available:
+                        val=sot_counts.get(lookup_id,sot_counts.get(lookup_name,0))
+                    elif field=='xg' and shot_feed_available:
+                        val=shot_xg.get(lookup_id,shot_xg.get(lookup_name,0.0))
+                    elif field=='cards' and events_feed_available:
+                        val=yellow_counts.get(lookup_id,yellow_counts.get(lookup_name,0))
                 if val is None:continue
                 a[field]+=val
                 a['_metric_minutes'][field]=a['_metric_minutes'].get(field,0.0)+mins
