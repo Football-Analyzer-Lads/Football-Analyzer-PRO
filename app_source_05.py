@@ -471,18 +471,12 @@ def pitchapi_serie_a():
             'seasons':list(dict.fromkeys([season,previous]+[x for x in seasons if x!=season]))}
 
 def pitchapi_league_matches(league_id,season,status='played'):
-    # The documented endpoint accepts season, not a status query parameter.
-    # Fetch the supported response once and filter the status locally.
-    ttl=90 if status=='all' else 6*3600
-    path=f'/leagues/{league_id}/matches?season={quote_plus(str(season))}'
+    # PitchAPI explicitly supports the status filter; keep it in the request so
+    # upcoming/live fixtures are not filtered out by the default played-only response.
+    ttl=90 if status in ('all','live') else 6*3600
+    path=f'/leagues/{league_id}/matches?season={quote_plus(str(season))}&status={quote_plus(str(status))}'
     data=pitchapi_get(path,ttl=ttl)
     matches=data.get('matches',[]) if isinstance(data,dict) else []
-    def state(match):
-        return re.sub(r'[^a-z0-9]+','',str(match.get('status') or '').lower())
-    finished={'finished','fulltime','afterextratime','penaltyshootout','aet','ft'}
-    pending={'scheduled','notstarted','upcoming','tbd','notplayed'}
-    if status=='played':return [m for m in matches if state(m) in finished]
-    if status=='upcoming':return [m for m in matches if state(m) in pending]
     if status=='live':return [m for m in matches if _pitchapi_live_status(m.get('status'))]
     return matches
 
@@ -568,7 +562,7 @@ def pitchapi_live_match_data(r):
         return {'available':False,'isLive':False,'reason':'Partita selezionata non in data odierna'}
     # The date endpoint returns the free-tier covered fixtures for today and
     # avoids scanning whole seasons to find a live match.
-    day_data=pitchapi_get('/date/'+date.today().isoformat(),ttl=25)
+    day_data=pitchapi_get('/date/'+date.today().isoformat()+'?status=all',ttl=25)
     day_matches=day_data.get('matches',[]) if isinstance(day_data,dict) else []
     target_home=r.get('home');target_away=r.get('away')
     matches=[m for m in day_matches
@@ -699,10 +693,11 @@ def pitchapi_player_history(team_name,target_date=None,limit=12):
                         xg_value=_pitchapi_num(shot.get('expected_goals'))
                         if xg_value is not None:shot_xg[(kind,pk)]=shot_xg.get((kind,pk),0.0)+xg_value
         event_data=pitchapi_get('/matches/'+str(mid)+'/events',ttl=30*86400)
-        events_feed_available=isinstance(event_data,dict) and isinstance(event_data.get('events'),list)
+        event_rows=(event_data.get('events') if isinstance(event_data,dict) else event_data)
+        events_feed_available=isinstance(event_rows,list)
         yellow_counts={}
         if events_feed_available:
-            for event in event_data.get('events') or []:
+            for event in event_rows or []:
                 etype=re.sub(r'[^a-z0-9]+','',str(event.get('event_type') or '').lower())
                 if etype!='yellowcard':continue
                 if wanted_id is not None and event.get('team_id')!=wanted_id:continue
