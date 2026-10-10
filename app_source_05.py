@@ -284,15 +284,17 @@ def api_football_live_match_data(r):
         live_fixtures=payload.get('response') or []
         def team_key(value):
             s=norm_team(str(value or '')).lower()
-            s=re.sub(r'\b(fc|cf|ssc|calcio|1907|1919|1927|1928|1912)\b','',s)
+            s=re.sub(r'\b(fc|cf|ssc|calcio|(?:19|20)\d{2})\b','',s)
             return re.sub(r'[^a-z0-9]+','',s)
+        def same_club(a,b):
+            return bool(a and b) and (a==b or (min(len(a),len(b))>=4 and (a.endswith(b) or b.endswith(a))))
         target_home=team_key(r.get('home'));target_away=team_key(r.get('away'))
         match=None
         for fx in live_fixtures:
             teams=fx.get('teams') or {}
             hh=team_key((teams.get('home') or {}).get('name'))
             aa=team_key((teams.get('away') or {}).get('name'))
-            if hh==target_home and aa==target_away:
+            if same_club(hh,target_home) and same_club(aa,target_away):
                 match=fx;break
         if not match:
             return {'available':True,'isLive':False,'reason':'Nessuna partita selezionata attualmente live su API-Football'}
