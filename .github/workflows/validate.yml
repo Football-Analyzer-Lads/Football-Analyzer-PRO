@@ -1,0 +1,23 @@
+name: Validate Football Analyzer
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+jobs:
+  syntax:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Compile Python sources
+        run: python -m py_compile app.py app_source_01.py app_source_02.py app_source_03.py app_source_04.py app_source_05.py
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Validate frontend JavaScript
+        run: node --check static/app.js
