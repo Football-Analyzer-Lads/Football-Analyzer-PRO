@@ -79,7 +79,7 @@ try{
 const j=await api('/api/player-props?date='+encodeURIComponent(x.date)+'&home='+encodeURIComponent(x.home)+'&away='+encodeURIComponent(x.away));
 const d=j.data;const live=d.liveMatch||{};
 $('playerContext').innerHTML='<h3>'+x.home+' – '+x.away+'</h3><p>Fonte: '+(d.source||'')+' · arbitro: '+(d.referee||'non disponibile')+' · Probabili formazioni: '+(d.probableLineupsAvailable?'disponibili':'non disponibili')+' · Ufficiali: '+(d.lineupsAvailable?'disponibili':'non ancora disponibili')+' · Aggiornamento: '+(d.probableLineupsUpdated||'non indicato')+'</p><p class="muted">'+(d.notes||[]).join(' ')+'</p>';
-if(live.reason==='API_FOOTBALL_KEY non configurata')$('playerContext').innerHTML+='<p class="muted">Per attivare i dati live, configura API_FOOTBALL_KEY nel file config.env. Non incollare la chiave in chat.</p>';
+if(!d.pitchAPIConfigured)$('playerContext').innerHTML+='<p class="muted">PitchAPI non è configurata. Crea la chiave gratuita e aggiungi PITCHAPI_API_KEY=la_tua_chiave nel file config.env; poi riavvia start.command e premi “Verifica PitchAPI”. Non incollare la chiave in chat.</p>';if(live.reason==='API_FOOTBALL_KEY non configurata'&&d.pitchAPIConfigured===false)$('playerContext').innerHTML+='<p class="muted">La fonte di riserva API-Football non è configurata; PitchAPI può funzionare in modo indipendente.</p>';if(d.pitchAPIStatus&&d.pitchAPIStatus.configured&&!d.pitchAPIStatus.ok)$('playerContext').innerHTML+='<p class="muted">Diagnostica PitchAPI: '+String(d.pitchAPIStatus.error||'nessuna statistica storica corrispondente').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')+'</p>';
 const liveText=v=>v===null||v===undefined||v===''?'—':String(v);
 const liveEsc=v=>liveText(v).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 let livePanel='';
@@ -94,5 +94,30 @@ livePanel='<section class="card" style="margin-bottom:14px"><h3>LIVE · '+liveEs
 }
 $('playerTable').innerHTML=livePanel+(d.players?.length?`<table><thead><tr><th>Giocatore</th><th>Squadra</th><th>Ruolo</th><th>Stato</th><th>Storico</th><th>Titolarità</th><th>Min attesi</th><th>Falli ≥1</th><th>Falli subiti ≥1</th><th>Tiri ≥1</th><th>SoT ≥1</th><th>Ammonito ≥1</th><th>Gol ≥1</th></tr></thead><tbody>${d.players.map(p=>{const q=Object.fromEntries((p.propCandidates||[]).map(z=>[z.market,z.prob]));return `<tr><td><b>${p.name}</b></td><td>${p.team}</td><td>${p.position||'—'}</td><td>${p.lineupStatus||'—'}</td><td>${p.dataBasis||'—'}</td><td>${p.starterProbability!=null?p.starterProbability+'%':'—'}</td><td>${p.expectedMinutes||'—'}</td><td>${q['Falli commessi O0.5']!=null?q['Falli commessi O0.5']+'%':'—'}</td><td>${q['Falli subiti O0.5']!=null?q['Falli subiti O0.5']+'%':'—'}</td><td>${q['Tiri O0.5']!=null?q['Tiri O0.5']+'%':'—'}</td><td>${q['Tiri in porta O0.5']!=null?q['Tiri in porta O0.5']+'%':'—'}</td><td>${q['Cartellini O0.5']!=null?q['Cartellini O0.5']+'%':'—'}</td><td>${q['Gol O0.5']!=null?q['Gol O0.5']+'%':'—'}</td></tr>`}).join('')}</tbody></table>`:'<div class="card">Nessuno storico giocatore reale sufficiente per questa partita.</div>');if(live.isLive)playerLiveTimer=setInterval(()=>{const node=document.querySelector('#players');if(!document.hidden&&node&&node.classList.contains('active'))$('loadPlayers').click();},300000);
 }catch(e){$('playerContext').textContent='Errore: '+e.message}}
+const testPitchApi=$('testPitchApi');
+if(testPitchApi){
+  testPitchApi.onclick=async()=>{
+    testPitchApi.disabled=true;testPitchApi.textContent='Verifica in corso…';
+    $('playerContext').textContent='Verifico la chiave e la copertura Serie A di PitchAPI…';
+    try{
+      const response=await api('/api/pitchapi-status');
+      const d=response.data||{};
+      const state=d.ok?'Connessione riuscita':'Connessione non verificata';
+      const details=[
+        d.message||'Nessun dettaglio restituito.',
+        d.league?('Campionato: '+d.league):'',
+        d.season?('Stagione: '+d.season):'',
+        d.playedMatches!=null?('Partite concluse disponibili: '+d.playedMatches):'',
+        d.upcomingMatches!=null?('Partite future disponibili: '+d.upcomingMatches):'',
+        d.error?('Dettaglio errore: '+(typeof d.error==='string'?d.error:JSON.stringify(d.error)):''
+      ].filter(Boolean);
+      $('playerContext').innerHTML='<h3>Test PitchAPI · '+state+'</h3><p>'+details.map(s=>String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')).join('<br>')+'</p><p class="muted">Quando la connessione è attiva, clicca “Analizza giocatori” per recuperare lo storico della partita selezionata.</p>';
+    }catch(e){
+      $('playerContext').textContent='Test PitchAPI fallito: '+e.message;
+    }finally{
+      testPitchApi.disabled=false;testPitchApi.textContent='Verifica PitchAPI';
+    }
+  };
+}
 async function loadNews(){try{const j=await api('/api/news');const items=j.items||[];const card=n=>{const dt=n.date?new Date(n.date).toLocaleDateString('it-IT',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'}):'';return `<article class="newsCard"><div class="newsTop"><span class="newsBadge">CALCIO</span><span class="newsDate">${dt}</span></div><a href="${n.link}" target="_blank" rel="noreferrer"><h3>${n.title}</h3></a><div class="newsSource">${n.source||'News'} <span>↗</span></div></article>`};$('dashboardNews').innerHTML=items.length?items.slice(0,6).map(card).join(''):'<div class="emptyNews">Feed news non disponibile in questo momento.</div>';$('newsList').innerHTML=items.length?items.map(card).join(''):'<div class="card">Feed news non disponibile in questo momento.</div>'}catch(e){$('dashboardNews').innerHTML='<div class="emptyNews">Feed news non disponibile.</div>';if($('newsList'))$('newsList').innerHTML='<div class="card">Feed news non disponibile.</div>'}}
 ['dashboardNewsRefresh','newsRefresh'].forEach(id=>{const b=$(id);if(b)b.onclick=loadNews});$('refresh').onclick=async()=>{const b=$('refresh');b.disabled=true;b.textContent='⏳ Aggiornamento avviato…';try{const r=await api('/api/refresh',{method:'POST'});b.textContent=r.data?.status==='already_running'?'⏳ Aggiornamento già in corso…':'✓ Aggiornamento in background';setTimeout(()=>{b.textContent='↻ Aggiorna dati';b.disabled=false},1800)}catch(e){b.textContent='⚠ Errore aggiornamento';b.disabled=false;alert('Aggiornamento non riuscito: '+e.message)}};tabs();fillSelection();load().catch(e=>alert(e.message));
