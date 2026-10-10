@@ -76,10 +76,16 @@ def api_football_get(path,ttl=1800):
         API_FOOTBALL_LAST_ERROR='API_FOOTBALL_KEY non configurata'
         API_FOOTBALL_LAST_STATUS={'configured':False,'path':path}
         return None
-    cache=_odds_cache_load();key=path;now=time.time();v=cache.get(key)
+    # Versioned key intentionally bypasses stale cached errors/responses created
+    # by older builds before the Player Analyzer history fix.
+    cache=_odds_cache_load();key='api-v2:'+path;now=time.time();v=cache.get(key)
     if v and now-v.get('ts',0)<ttl:
-        API_FOOTBALL_LAST_STATUS={'configured':True,'cached':True,'path':path,'http':200}
-        return v.get('data')
+        data=v.get('data')
+        errs=(data.get('errors') if isinstance(data,dict) else None) or {}
+        if not errs:
+            API_FOOTBALL_LAST_STATUS={'configured':True,'cached':True,'path':path,'http':200,
+                                      'results':data.get('results') if isinstance(data,dict) else None,'errors':{}}
+            return data
     try:
         req=Request(API_FOOTBALL+path,headers={'x-apisports-key':API_FOOTBALL_KEY,'User-Agent':'FootballAnalyzer/PRO'})
         with urlopen(req,timeout=20) as resp:
@@ -90,8 +96,13 @@ def api_football_get(path,ttl=1800):
             API_FOOTBALL_LAST_ERROR=json.dumps(api_errors,ensure_ascii=False)
         else:
             API_FOOTBALL_LAST_ERROR=''
-        API_FOOTBALL_LAST_STATUS={'configured':True,'cached':False,'path':path,'http':code,'results':(data.get('results') if isinstance(data,dict) else None),'errors':api_errors}
-        cache[key]={'ts':now,'data':data};_odds_cache_save(cache);return data
+        API_FOOTBALL_LAST_STATUS={'configured':True,'cached':False,'path':path,'http':code,
+                                  'results':(data.get('results') if isinstance(data,dict) else None),'errors':api_errors}
+        # Never cache invalid-key, quota, or other provider errors: a transient
+        # failure must not make every later Player Analyzer refresh stay empty.
+        if not api_errors:
+            cache[key]={'ts':now,'data':data};_odds_cache_save(cache)
+        return data
     except Exception as e:
         API_FOOTBALL_LAST_ERROR=str(e)
         API_FOOTBALL_LAST_STATUS={'configured':True,'cached':False,'path':path,'http':None,'errors':{'exception':str(e)}}
