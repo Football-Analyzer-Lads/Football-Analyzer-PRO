@@ -824,7 +824,7 @@ def player_props(d,r):
                     vals=list(unique.values())
                     hist=next((v for v in vals if v.get('_historyProvider')=='PitchAPI'),
                          next((v for v in vals if v.get('_historyProvider')=='API-Football'),vals[0]))
-            if not hist or _stat_float(hist.get('minutes'))<=0:
+        if not hist or _stat_float(hist.get('minutes'))<=0:
             if p.get('fromProbableSource'):
                 p['position']=p.get('position') or '—'
                 p['starterProbability']=float(p.get('starterProbability') or 0)
