@@ -38,6 +38,10 @@ def _local_config_value(name):
 API_FOOTBALL_KEY=_local_config_value('API_FOOTBALL_KEY')
 API_FOOTBALL_LAST_ERROR=''
 API_FOOTBALL_LAST_STATUS={}
+PITCHAPI_BASE='https://api.pitchapi.dev/v1'
+PITCHAPI_API_KEY=_local_config_value('PITCHAPI_API_KEY')
+PITCHAPI_LAST_ERROR=''
+PITCHAPI_LAST_STATUS={'configured':bool(PITCHAPI_API_KEY)}
 app=Flask(__name__, static_folder=os.path.join(BASE,'static'), template_folder=os.path.join(BASE,'templates'), static_url_path='/static')
 
 TEAM_ALIASES={'Ssc Napoli':'Napoli','SS Monza 1912':'Monza','Inter Milan':'Inter','Internazionale':'Inter','Milan':'AC Milan','Roma':'AS Roma','Como 1907':'Como','Como Calcio':'Como','Frosinone Calcio':'Frosinone','Frosinone 1928':'Frosinone'}
