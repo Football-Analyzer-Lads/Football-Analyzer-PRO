@@ -92,84 +92,135 @@ def sofa_event_for(r):
 def player_stats_from_lineup(lineup,side):
     rows=[]
     for item in (lineup.get(side,{}).get('players',[]) if lineup else []):
-        p=item.get('player',{});s=item.get('statistics') or {};mins=s.get('minutesPlayed') or 0
+        p=item.get('player',{});s=item.get('statistics') or {}
+        mins=s.get('minutesPlayed') or s.get('minutes') or 0
         if not p.get('name'):continue
-        rows.append({'id':p.get('id'),'name':p.get('name'),'position':p.get('position'),'substitute':item.get('substitute',False),'minutes':mins,'fouls':s.get('fouls'),'fouled':s.get('wasFouled'),'shots':s.get('totalShots') or s.get('shots'),'sot':s.get('shotsOnTarget'),'cards':s.get('yellowCards',0) or 0,'goals':s.get('goals',0) or 0,'assists':s.get('assists',0) or 0})
+        def first_value(*keys):
+            for key in keys:
+                if s.get(key) is not None:return s.get(key)
+            return None
+        rows.append({'id':p.get('id'),'name':p.get('name'),'position':p.get('position'),
+            'substitute':item.get('substitute',False),'minutes':mins,
+            'fouls':first_value('fouls','totalFouls'),
+            'fouled':first_value('wasFouled','fouled','foulsSuffered'),
+            'shots':first_value('totalShots','totalScoringAtt','shots'),
+            'sot':first_value('onTargetScoringAttempt','shotsOnTarget','shotsOnGoal'),
+            'cards':first_value('yellowCards','yellowCard',) or 0,
+            'goals':first_value('goals','goal') or 0,
+            'assists':first_value('assists','goalAssist') or 0})
     return rows
 
+def _player_name_key(value):
+    import unicodedata
+    value=unicodedata.normalize('NFKD',str(value or '')).encode('ascii','ignore').decode('ascii').lower()
+    return re.sub(r'[^a-z0-9]+',' ',value).strip()
+
+def _stat_float(value):
+    if value is None or value=='':return 0.0
+    try:return float(value)
+    except Exception:return 0.0
+
 def player_history(team_id):
-    # Prefer recent real match lineups. Read up to 24 finished matches so
-    # missing data on one match does not wipe the whole player history.
+    # Use actual per-player statistics from recent finished matches. Initialize
+    # aggregate counters at zero to avoid double-counting the first appearance.
     agg={};pages=[]
     for page in (0,1):
         data=sofa_get(f'/team/{team_id}/events/last/{page}',ttl=1800)
         evs=(data or {}).get('events',[])
-        if not evs: break
+        if not evs:break
         pages.extend(evs)
-        if len(pages)>=24: break
+        if len(pages)>=24:break
     for e in pages[:24]:
         if e.get('status',{}).get('type')!='finished':continue
         lu=sofa_get(f"/event/{e['id']}/lineups",ttl=7*86400)
         if not lu:continue
         side='home' if e.get('homeTeam',{}).get('id')==team_id else 'away'
         for s in player_stats_from_lineup(lu,side):
-            if not s['minutes']:continue
-            a=agg.setdefault(s['id'],dict(s,apps=0,starts=0));a['apps']+=1
-            if not s.get('substitute'): a['starts']+=1
+            pid=s.get('id')
+            mins=_stat_float(s.get('minutes'))
+            if pid is None or mins<=0:continue
+            if pid not in agg:
+                agg[pid]={'id':pid,'name':s.get('name'),'position':s.get('position'),
+                          'apps':0,'starts':0,'minutes':0.0,'fouls':0.0,'fouled':0.0,
+                          'shots':0.0,'sot':0.0,'cards':0.0,'goals':0.0,'assists':0.0}
+            a=agg[pid];a['apps']+=1
+            if not s.get('substitute'):a['starts']+=1
             for k in ('minutes','fouls','fouled','shots','sot','cards','goals','assists'):
-                if s.get(k) is not None:a[k]=(a.get(k) or 0)+(s.get(k) or 0)
+                if s.get(k) is not None:a[k]+=_stat_float(s.get(k))
     out=[]
     for a in agg.values():
-        mins=a['minutes'] or 1
-        a['fouls90']=round((a.get('fouls') or 0)/mins*90,2);a['fouled90']=round((a.get('fouled') or 0)/mins*90,2);a['shots90']=round((a.get('shots') or 0)/mins*90,2);a['sot90']=round((a.get('sot') or 0)/mins*90,2);a['cards90']=round((a.get('cards') or 0)/mins*90,2)
-        a['starterPct']=round(100*(a.get('starts',0)/max(1,a.get('apps',0))),1)
-        a['avgMinutes']=round(a.get('minutes',0)/max(1,a.get('apps',0)),1);out.append(a)
+        mins=a['minutes'] or 1.0
+        a['fouls90']=round(a['fouls']/mins*90,2);a['fouled90']=round(a['fouled']/mins*90,2)
+        a['shots90']=round(a['shots']/mins*90,2);a['sot90']=round(a['sot']/mins*90,2)
+        a['cards90']=round(a['cards']/mins*90,2)
+        a['starterPct']=round(100*a['starts']/max(1,a['apps']),1)
+        a['avgMinutes']=round(a['minutes']/max(1,a['apps']),1)
+        out.append(a)
     return sorted(out,key=lambda x:x['minutes'],reverse=True)
 
 def api_football_player_history(team_name):
-    """Return real per-player statistics, trying current and previous Serie A seasons."""
+    """Fetch season totals from API-Football and combine current + previous Serie A season.
+    Rows with fewer than 120 minutes are retained so early-season/squad players are not
+    silently omitted; the UI labels small samples transparently.
+    """
     try:
         if not API_FOOTBALL_KEY:return []
-        target=norm_team(team_name)
+        target=norm_team(team_name).lower()
+        combined={}
         for season in (2026,2025):
             team_data=api_football_get('/teams?name='+quote_plus(str(team_name))+'&league='+str(API_FOOTBALL_LEAGUE)+'&season='+str(season),ttl=24*3600) or {}
             team_rows=team_data.get('response') or []
-            team_obj=next((x.get('team',{}) for x in team_rows
-                           if norm_team((x.get('team') or {}).get('name',''))==target),None)
-            if not team_obj and team_rows:
+            team_obj=None
+            for item in team_rows:
+                t=item.get('team') or {}
+                if norm_team(t.get('name','')).lower()==target:
+                    team_obj=t;break
+            if not team_obj and len(team_rows)==1:
                 team_obj=(team_rows[0].get('team') or {})
             tid=(team_obj or {}).get('id')
-            if not tid:
-                for fx in api_football_season_fixtures():
-                    th=norm_team((fx.get('teams') or {}).get('home',{}).get('name',''))
-                    ta=norm_team((fx.get('teams') or {}).get('away',{}).get('name',''))
-                    if target in (th,ta):
-                        tid=((fx.get('teams') or {}).get('home',{}).get('id') if target==th
-                             else (fx.get('teams') or {}).get('away',{}).get('id'))
-                        if tid:break
             if not tid:continue
-            out=[];page=1
+            page=1
             while page<=10:
                 data=api_football_get(f'/players?league={API_FOOTBALL_LEAGUE}&season={season}&team={tid}&page={page}',ttl=6*3600) or {}
                 rows=data.get('response') or []
                 if not rows:break
                 for row in rows:
-                    p=row.get('player') or {}; st=(row.get('statistics') or [{}])[0]
-                    g=st.get('games') or {}; mins=float(g.get('minutes') or 0); apps=int(g.get('appearences') or 0); starts=int(g.get('lineups') or 0)
-                    if mins<120 or not p.get('id'):continue
-                    shots=st.get('shots') or {}; fouls=st.get('fouls') or {}; cards=st.get('cards') or {}; goals=st.get('goals') or {}
-                    a={'id':p.get('id'),'name':p.get('name'),'position':g.get('position'),
-                       'minutes':mins,'apps':apps,'starts':starts,'fouls':fouls.get('committed') or 0,
-                       'fouled':fouls.get('drawn') or 0,'shots':shots.get('total') or 0,'sot':shots.get('on') or 0,
-                       'cards':cards.get('yellow') or 0,'goals':goals.get('total') or 0,'assists':goals.get('assists') or 0,
-                       'historySeason':season}
-                    a['starterPct']=round(100*starts/max(1,apps),1);a['avgMinutes']=round(mins/max(1,apps),1)
-                    a['fouls90']=round(a['fouls']/mins*90,2);a['fouled90']=round(a['fouled']/mins*90,2);a['shots90']=round(a['shots']/mins*90,2);a['sot90']=round(a['sot']/mins*90,2);a['cards90']=round(a['cards']/mins*90,2)
-                    out.append(a)
+                    p=row.get('player') or {}
+                    st=(row.get('statistics') or [{}])[0]
+                    g=st.get('games') or {}
+                    mins=_stat_float(g.get('minutes'))
+                    apps=int(_stat_float(g.get('appearences')))
+                    starts=int(_stat_float(g.get('lineups')))
+                    if not p.get('id') or mins<=0:continue
+                    shots=st.get('shots') or {};fouls=st.get('fouls') or {}
+                    cards=st.get('cards') or {};goals=st.get('goals') or {}
+                    key=_player_name_key(p.get('name')) or str(p.get('id'))
+                    if key not in combined:
+                        combined[key]={'id':p.get('id'),'name':p.get('name'),'position':g.get('position'),
+                            'apps':0,'starts':0,'minutes':0.0,'fouls':0.0,'fouled':0.0,
+                            'shots':0.0,'sot':0.0,'cards':0.0,'goals':0.0,'assists':0.0,'historySeasons':[]}
+                    a=combined[key]
+                    # If a player has two season rows, aggregate genuine totals before
+                    # deriving per-90 rates; never add provider IDs across namespaces.
+                    a['apps']+=apps;a['starts']+=starts;a['minutes']+=mins
+                    a['fouls']+=_stat_float(fouls.get('committed'))
+                    a['fouled']+=_stat_float(fouls.get('drawn'))
+                    a['shots']+=_stat_float(shots.get('total'));a['sot']+=_stat_float(shots.get('on'))
+                    a['cards']+=_stat_float(cards.get('yellow'))
+                    a['goals']+=_stat_float(goals.get('total'));a['assists']+=_stat_float(goals.get('assists'))
+                    if season not in a['historySeasons']:a['historySeasons'].append(season)
                 if len(rows)<20:break
                 page+=1
-            if out:return sorted(out,key=lambda x:x['minutes'],reverse=True)
-        return []
+        out=[]
+        for a in combined.values():
+            mins=a['minutes'] or 1.0
+            a['starterPct']=round(100*a['starts']/max(1,a['apps']),1)
+            a['avgMinutes']=round(a['minutes']/max(1,a['apps']),1)
+            a['fouls90']=round(a['fouls']/mins*90,2);a['fouled90']=round(a['fouled']/mins*90,2)
+            a['shots90']=round(a['shots']/mins*90,2);a['sot90']=round(a['sot']/mins*90,2)
+            a['cards90']=round(a['cards']/mins*90,2)
+            out.append(a)
+        return sorted(out,key=lambda x:x['minutes'],reverse=True)
     except Exception:
         return []
 
@@ -370,22 +421,24 @@ def player_props(d,r):
     history_diagnostics=[]
     for side in ('home','away'):
         tid=(e or {}).get(side+'Team',{}).get('id')
-        # The fixture endpoint can miss a match even when team match histories
-        # are available. Resolve the club independently instead of abandoning
-        # all foul/shot/card statistics just because the event was not found.
         if not tid:
             tid=sofa_team_id_for_name(r[side])
         sofa_rows=player_history(tid) if tid else []
-        hist_rows=sofa_rows
-        api_count=0
-        if len(hist_rows)<3 and API_FOOTBALL_KEY:
-            api_rows=api_football_player_history(r[side])
-            api_count=len(api_rows)
-            if len(api_rows)>len(hist_rows):hist_rows=api_rows
-        histories[side]={x['id']:x for x in hist_rows if x.get('id') is not None}
-        history_diagnostics.append(f"{r[side]}: ID SofaScore {'trovato' if tid else 'non trovato'}, storico SofaScore {len(sofa_rows)} giocatori, API-Football {api_count} giocatori")
-    if not any(histories.get(side) for side in ('home','away')):
-        result['notes'].append('Diagnostica storico: '+'; '.join(history_diagnostics)+f". API-Football key configurata: {'sì' if bool(API_FOOTBALL_KEY) else 'no'}. Ultimo stato API: {str(API_FOOTBALL_LAST_STATUS)[:240] if 'API_FOOTBALL_LAST_STATUS' in globals() else 'non disponibile'}.")
+        # Query API-Football even when SofaScore returned several players: those
+        # rows may not overlap with the likely XI. Preserve both providers, preferring
+        # the season aggregate when matching a player by name.
+        api_rows=api_football_player_history(r[side]) if API_FOOTBALL_KEY else []
+        side_rows={}
+        for row in sofa_rows:
+            if row.get('id') is not None:
+                entry=dict(row);entry['_historyProvider']='SofaScore'
+                side_rows['sofa:'+str(row['id'])]=entry
+        for row in api_rows:
+            if row.get('id') is not None:
+                entry=dict(row);entry['_historyProvider']='API-Football'
+                side_rows['api:'+str(row['id'])+':'+_player_name_key(row.get('name'))]=entry
+        histories[side]=side_rows
+        history_diagnostics.append(f"{r[side]}: ID SofaScore {'trovato' if tid else 'non trovato'}, storico SofaScore {len(sofa_rows)} giocatori, API-Football {len(api_rows)} giocatori")
     if not e:
         result['notes'].append('SofaScore non ha restituito la partita: uso le probabili formazioni pubbliche e lo storico disponibile.')
     probable_candidates=[]
@@ -416,32 +469,36 @@ def player_props(d,r):
 
     for p in candidates:
         side_hist=histories.get(p.get('side'),{})
-        hist=side_hist.get(p.get('id'))
-        # Provider IDs differ; normalized name matching is the cross-provider fallback.
-        if not hist and p.get('name'):
-            pname=norm_team(p.get('name'))
-            hist=next((v for v in side_hist.values() if norm_team(v.get('name',''))==pname),None)
+        hist=None
+        if p.get('name'):
+            pname=_player_name_key(p.get('name'))
+            # Names are cross-provider identifiers; prefer API-Football season data.
+            exact=[v for v in side_hist.values() if _player_name_key(v.get('name'))==pname]
+            if exact:
+                hist=next((v for v in exact if v.get('_historyProvider')=='API-Football'),exact[0])
             if not hist:
-                # Probable-lineup feeds often abbreviate first names (e.g.
-                # "Esposito F.P.") while statistics providers use full names.
-                # Match on a unique surname/token only; never pick arbitrarily
-                # when more than one historical player could match.
-                tokens=[t for t in re.findall(r'[a-z0-9]+',pname.lower()) if len(t)>2]
+                # Fantacalcio abbreviates first names in probable lineups (e.g. Esposito F.P.).
+                # Match only a unique shared surname/token to avoid assigning another player.
+                tokens=[t for t in pname.split() if len(t)>2]
                 matches=[]
                 for v in side_hist.values():
-                    vname=norm_team(v.get('name','')).lower()
-                    vtokens=[t for t in re.findall(r'[a-z0-9]+',vname) if len(t)>2]
-                    if tokens and vtokens and (tokens[0] in vtokens or vtokens[-1] in tokens):
+                    vtokens=[t for t in _player_name_key(v.get('name')).split() if len(t)>2]
+                    if tokens and vtokens and tokens[-1] in vtokens:
                         matches.append(v)
-                if len(matches)==1:
-                    hist=matches[0]
-        if not hist or hist.get('minutes',0)<120:
+                # Deduplicate same player when both providers contain a row.
+                unique={}
+                for v in matches:
+                    unique[_player_name_key(v.get('name'))]=v
+                if len(unique)==1:
+                    vals=list(unique.values())
+                    hist=next((v for v in vals if v.get('_historyProvider')=='API-Football'),vals[0])
+        if not hist or _stat_float(hist.get('minutes'))<=0:
             if p.get('fromProbableSource'):
                 p['position']=p.get('position') or '—'
                 p['starterProbability']=float(p.get('starterProbability') or 0)
                 p['expectedMinutes']=None
                 p['propCandidates']=[]
-                p['dataBasis']='Probabile formazione Fantacalcio.it; storico statistiche non disponibile'
+                p['dataBasis']='Storico non trovato: '+('API-Football key non configurata; SofaScore senza dati' if not API_FOOTBALL_KEY else 'nessuna statistica storica corrispondente')
                 result['players'].append(p)
             continue
         if p.get('fromProbableSource'):
@@ -476,7 +533,10 @@ def player_props(d,r):
         p['propCandidates']=sorted(props,key=lambda x:x['prob'],reverse=True)
         p['foulProbability']=next((x['prob'] for x in props if x['market']=='Falli commessi O0.5'),None)
         p['cardProbability']=next((x['prob'] for x in props if x['market']=='Cartellini O0.5'),None)
-        p['dataBasis']=(f"Fantacalcio.it · {hist.get('apps')} gare · {hist.get('starts',0)} da titolare · {hist.get('minutes')} minuti storici" if p.get('fromProbableSource') else f"{hist.get('apps')} gare · {hist.get('starts',0)} da titolare · {hist.get('minutes')} minuti storici")
+        sample_note='campione limitato' if _stat_float(hist.get('minutes'))<180 else 'campione storico'
+        provider_note=hist.get('_historyProvider') or 'SofaScore'
+        seasons_note=(', stagioni '+','.join(str(x) for x in hist.get('historySeasons',[]))) if hist.get('historySeasons') else ''
+        p['dataBasis']=(f"Fantacalcio.it · {hist.get('apps')} gare · {hist.get('starts',0)} da titolare · {int(_stat_float(hist.get('minutes')))} minuti · {provider_note}{seasons_note} · {sample_note}" if p.get('fromProbableSource') else f"{hist.get('apps')} gare · {hist.get('starts',0)} da titolare · {int(_stat_float(hist.get('minutes')))} minuti · {provider_note}{seasons_note} · {sample_note}")
         result['players'].append(p)
 
     result['available']=bool(e or result['players'])
@@ -484,6 +544,9 @@ def player_props(d,r):
     if candidates and not lu:
         result['notes'].append('Probabili formazioni e percentuali di titolarità da Fantacalcio.it; non sono formazioni ufficiali.'+(f' Ultimo aggiornamento fonte: {probable_updated}.' if probable_updated else ''))
     elif not lu: result['notes'].append('Formazioni ufficiali non ancora disponibili: le stime migliorano quando la formazione è confermata.')
+    matched=sum(1 for item in result['players'] if item.get('history'))
+    probable_count=len(probable_candidates)
+    result['notes'].append(f"Storico giocatori trovato: {matched}/{probable_count if probable_count else len(result['players'])}. "+('API-Football attiva come fonte storica.' if API_FOOTBALL_KEY else 'API-Football non configurata: dipendenza dallo storico SofaScore.')+' Diagnostica: '+'; '.join(history_diagnostics)+'.')
     result['notes'].append('Le probabilità sono stime Poisson basate su tassi storici e minuti attesi; non sono garanzie e non vengono inventati dati.')
     return result
 
