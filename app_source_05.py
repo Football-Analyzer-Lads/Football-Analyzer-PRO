@@ -542,10 +542,12 @@ def _pitchapi_num(value):
     except Exception:return None
 
 def _pitchapi_live_status(status):
+    # Deliberately conservative: never show a finished or unknown-status fixture
+    # as live just because its provider status is new/unrecognised.
     s=re.sub(r'[^a-z0-9]+','',str(status or '').lower())
-    if not s:return False
-    if s in ('notstarted','scheduled','upcoming','finished','ended','afterextratime','penaltyshootout','postponed','cancelled','canceled','tbd'):return False
-    return s in ('live','inplay','inprogress','firsthalf','secondhalf','halftime','half','1h','2h','ht','extratime','penalties','break') or s not in ('notstarted','scheduled','upcoming','finished','ended','afterextratime','penaltyshootout','postponed','cancelled','canceled','tbd')
+    return s in ('live','inplay','inprogress','firsthalf','secondhalf','halftime','half',
+                 '1h','2h','ht','extratime','extratimebreak','penalties','penaltyshootoutlive',
+                 'break','suspendedlive')
 
 def pitchapi_live_match_data(r):
     """Load one selected Serie A match's live team and individual statistics."""
@@ -702,38 +704,54 @@ def player_props(d,r):
     e=sofa_event_for(r)
     probable=fantacalcio_probable_lineups()
     probable_updated=probable.get('updated')
-    result={'available':False,'source':'Fantacalcio.it + SofaScore + API-Football','eventId':e.get('id') if e else None,
+    result={'available':False,'source':'Fantacalcio.it + PitchAPI + SofaScore + API-Football',
+            'eventId':e.get('id') if e else None,
             'referee':(e or {}).get('referee',{}).get('name'),'players':[],'notes':[],'lineupsAvailable':False,
             'probableLineupsAvailable':False,'probableLineupsUpdated':probable_updated,'probableLineupsSource':probable.get('source')}
-    # SofaScore is the preferred source, but its scheduled-event endpoint can
-    # temporarily omit a fixture. In that case continue with API-Football
-    # historical player aggregates instead of returning an empty screen.
     lu=sofa_get(f"/event/{e['id']}/lineups",ttl=900) if e else None
     result['lineupsAvailable']=bool(lu)
-    # Live feed is queried only for today's selected match, not for every scheduled fixture.
-    result['liveMatch']=api_football_live_match_data(r) if r.get('date')==date.today().isoformat() else {'available':False,'isLive':False,'reason':'Partita non in data odierna'}
+    result['pitchAPIConfigured']=bool(PITCHAPI_API_KEY)
+    result['pitchAPIStatus']={'configured':bool(PITCHAPI_API_KEY),'ok':None,'error':None}
+    # Prefer PitchAPI live box score. Keep existing API-Football as a fallback.
+    is_today=str(r.get('date') or '')==date.today().isoformat()
+    if is_today and PITCHAPI_API_KEY:
+        result['liveMatch']=pitchapi_live_match_data(r)
+        result['pitchAPIStatus']={'configured':True,'ok':bool(PITCHAPI_LAST_STATUS.get('ok',result['liveMatch'].get('available'))),
+                                  'error':PITCHAPI_LAST_ERROR or result['liveMatch'].get('reason')}
+        if not result['liveMatch'].get('isLive') and API_FOOTBALL_KEY:
+            alt_live=api_football_live_match_data(r)
+            if alt_live.get('isLive'):result['liveMatch']=alt_live
+    elif is_today:
+        result['liveMatch']=api_football_live_match_data(r)
+        result['pitchAPIStatus']={'configured':False,'ok':False,'error':'Aggiungi PITCHAPI_API_KEY a config.env per attivare PitchAPI'}
+    else:
+        result['liveMatch']={'available':False,'isLive':False,'reason':'Partita non in data odierna'}
+        result['pitchAPIStatus']={'configured':bool(PITCHAPI_API_KEY),'ok':None,'error':None}
     histories={}
     history_diagnostics=[]
     for side in ('home','away'):
         tid=(e or {}).get(side+'Team',{}).get('id')
-        if not tid:
-            tid=sofa_team_id_for_name(r[side])
+        if not tid:tid=sofa_team_id_for_name(r[side])
         sofa_rows=player_history(tid) if tid else []
-        # Query API-Football even when SofaScore returned several players: those
-        # rows may not overlap with the likely XI. Preserve both providers, preferring
-        # the season aggregate when matching a player by name.
+        pitch_rows=pitchapi_player_history(r[side],target_date=r.get('date'),limit=8) if PITCHAPI_API_KEY else []
         api_rows=api_football_player_history(r[side]) if API_FOOTBALL_KEY else []
         side_rows={}
-        for row in sofa_rows:
+        # Prefer PitchAPI first: its match-level data is consistent across the last
+        # matches and doesn't require a paid plan for Serie A.
+        for row in pitch_rows:
             if row.get('id') is not None:
-                entry=dict(row);entry['_historyProvider']='SofaScore'
-                side_rows['sofa:'+str(row['id'])]=entry
+                entry=dict(row);entry['_historyProvider']='PitchAPI'
+                side_rows['pitch:'+str(row['id'])+':'+_player_name_key(row.get('name'))]=entry
         for row in api_rows:
             if row.get('id') is not None:
                 entry=dict(row);entry['_historyProvider']='API-Football'
                 side_rows['api:'+str(row['id'])+':'+_player_name_key(row.get('name'))]=entry
+        for row in sofa_rows:
+            if row.get('id') is not None:
+                entry=dict(row);entry['_historyProvider']='SofaScore'
+                side_rows['sofa:'+str(row['id'])+':'+_player_name_key(row.get('name'))]=entry
         histories[side]=side_rows
-        history_diagnostics.append(f"{r[side]}: ID SofaScore {'trovato' if tid else 'non trovato'}, storico SofaScore {len(sofa_rows)} giocatori, API-Football {len(api_rows)} giocatori")
+        history_diagnostics.append(f"{r[side]}: PitchAPI {len(pitch_rows)} giocatori; SofaScore {len(sofa_rows)}; API-Football {len(api_rows)}")
     if not e:
         result['notes'].append('SofaScore non ha restituito la partita: uso le probabili formazioni pubbliche e lo storico disponibile.')
     probable_candidates=[]
@@ -770,7 +788,8 @@ def player_props(d,r):
             # Names are cross-provider identifiers; prefer API-Football season data.
             exact=[v for v in side_hist.values() if _player_name_key(v.get('name'))==pname]
             if exact:
-                hist=next((v for v in exact if v.get('_historyProvider')=='API-Football'),exact[0])
+                hist=next((v for v in exact if v.get('_historyProvider')=='PitchAPI'),
+                     next((v for v in exact if v.get('_historyProvider')=='API-Football'),exact[0]))
             if not hist:
                 # Fantacalcio abbreviates first names in probable lineups (e.g. Esposito F.P.).
                 # Match only a unique shared surname/token to avoid assigning another player.
@@ -793,7 +812,8 @@ def player_props(d,r):
                     unique[_player_name_key(v.get('name'))]=v
                 if len(unique)==1:
                     vals=list(unique.values())
-                    hist=next((v for v in vals if v.get('_historyProvider')=='API-Football'),vals[0])
+                    hist=next((v for v in vals if v.get('_historyProvider')=='PitchAPI'),
+                         next((v for v in vals if v.get('_historyProvider')=='API-Football'),vals[0]))
         if not hist or _stat_float(hist.get('minutes'))<=0:
             if p.get('fromProbableSource'):
                 p['position']=p.get('position') or '—'
@@ -848,7 +868,11 @@ def player_props(d,r):
     elif not lu: result['notes'].append('Formazioni ufficiali non ancora disponibili: le stime migliorano quando la formazione è confermata.')
     matched=sum(1 for item in result['players'] if item.get('history'))
     probable_count=len(probable_candidates)
-    result['notes'].append(f"Storico giocatori trovato: {matched}/{probable_count if probable_count else len(result['players'])}. "+('API-Football attiva come fonte storica.' if API_FOOTBALL_KEY else 'API-Football non configurata: dipendenza dallo storico SofaScore.')+' Diagnostica: '+'; '.join(history_diagnostics)+'.'+(f" Ultimo stato API-Football: {str(API_FOOTBALL_LAST_STATUS)[:220]}." if API_FOOTBALL_KEY and matched < (probable_count or len(result['players'])) else ''))
+    if PITCHAPI_API_KEY:
+        result['pitchAPIStatus']={'configured':True,'ok':any('PitchAPI' in row for row in history_diagnostics),
+                                  'error':PITCHAPI_LAST_ERROR or PITCHAPI_LAST_STATUS.get('error'),
+                                  'diagnostics':history_diagnostics}
+    result['notes'].append(f"Storico giocatori trovato: {matched}/{probable_count if probable_count else len(result['players'])}. "+('PitchAPI configurata come fonte principale.' if PITCHAPI_API_KEY else 'PitchAPI non configurata.')+' Diagnostica: '+'; '.join(history_diagnostics)+'.'+(f" Stato PitchAPI: {str(PITCHAPI_LAST_STATUS)[:220]}." if PITCHAPI_API_KEY and matched < (probable_count or len(result['players'])) else '')+(f" Stato API-Football: {str(API_FOOTBALL_LAST_STATUS)[:180]}." if API_FOOTBALL_KEY and matched < (probable_count or len(result['players'])) else ''))
     result['notes'].append('Le probabilità sono stime Poisson basate su tassi storici e minuti attesi; non sono garanzie e non vengono inventati dati.')
     return result
 
@@ -929,6 +953,24 @@ def api_player_props():
                 r=candidates[0]
     if not r:return jsonify(ok=False,error='Partita non trovata'),404
     return jsonify(ok=True,data=player_props(d,r))
+@app.get('/api/pitchapi-status')
+def api_pitchapi_status():
+    if not PITCHAPI_API_KEY:
+        return jsonify(ok=True,data={'configured':False,'ok':False,
+            'message':'PITCHAPI_API_KEY non configurata nel file config.env.','error':None})
+    league=pitchapi_serie_a()
+    if not league:
+        return jsonify(ok=True,data={'configured':True,'ok':False,
+            'message':'Chiave configurata ma impossibile recuperare il catalogo campionati.',
+            'error':PITCHAPI_LAST_ERROR or PITCHAPI_LAST_STATUS.get('error') or PITCHAPI_LAST_STATUS})
+    played=pitchapi_league_matches(league['id'],league['season'],status='played')
+    upcoming=pitchapi_league_matches(league['id'],league['season'],status='upcoming')
+    ok=bool(played or upcoming)
+    return jsonify(ok=True,data={'configured':True,'ok':ok,'league':league['name'],
+        'leagueId':league['id'],'season':league['season'],'playedMatches':len(played),
+        'upcomingMatches':len(upcoming),'message':'Connessione PitchAPI verificata.' if ok else
+        'Serie A trovata, ma la lista partite è vuota. Controlla stagione/copertura.',
+        'providerStatus':PITCHAPI_LAST_STATUS,'error':PITCHAPI_LAST_ERROR or None})
 @app.get('/api/news')
 def api_news():return jsonify(ok=True,items=news())
 
