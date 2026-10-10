@@ -816,13 +816,17 @@ def player_props(d,r):
                     vals=list(unique.values())
                     hist=next((v for v in vals if v.get('_historyProvider')=='PitchAPI'),
                          next((v for v in vals if v.get('_historyProvider')=='API-Football'),vals[0]))
-        if not hist or _stat_float(hist.get('minutes'))<=0:
+            if not hist or _stat_float(hist.get('minutes'))<=0:
             if p.get('fromProbableSource'):
                 p['position']=p.get('position') or '—'
                 p['starterProbability']=float(p.get('starterProbability') or 0)
                 p['expectedMinutes']=None
                 p['propCandidates']=[]
-                p['dataBasis']='Storico non trovato: '+('API-Football key non configurata; SofaScore senza dati' if not API_FOOTBALL_KEY else 'nessuna statistica storica corrispondente')
+                if not PITCHAPI_API_KEY and not API_FOOTBALL_KEY:
+                    why='PITCHAPI_API_KEY non configurata; fonti di riserva senza storico corrispondente'
+                else:
+                    why='nessuna riga statistica corrispondente trovata nei provider'
+                p['dataBasis']='Storico non trovato: '+why
                 result['players'].append(p)
             continue
         if p.get('fromProbableSource'):
