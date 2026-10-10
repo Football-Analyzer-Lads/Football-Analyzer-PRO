@@ -403,6 +403,301 @@ def api_football_live_match_data(r):
     except Exception as exc:
         return {'available':False,'reason':'Errore recupero dati live: '+str(exc)[:180]}
 
+# ---- PitchAPI free Serie A player-data integration -----------------------------
+def pitchapi_get(path,ttl=3600,force=False):
+    """Read a PitchAPI endpoint. Cache only successful JSON responses."""
+    global PITCHAPI_LAST_ERROR,PITCHAPI_LAST_STATUS
+    if not PITCHAPI_API_KEY:
+        PITCHAPI_LAST_ERROR='PITCHAPI_API_KEY non configurata'
+        PITCHAPI_LAST_STATUS={'configured':False,'ok':False,'reason':PITCHAPI_LAST_ERROR,'path':path}
+        return None
+    cache=_context_cache_load();key='pitchapi:v1:'+path;now=time.time();v=cache.get(key)
+    if not force and v and now-v.get('ts',0)<ttl:
+        PITCHAPI_LAST_STATUS={'configured':True,'ok':True,'cached':True,'path':path,'http':200}
+        return v.get('data')
+    try:
+        req=Request(PITCHAPI_BASE+path,headers={'X-API-KEY':PITCHAPI_API_KEY,
+                    'Accept':'application/json','User-Agent':'FootballAnalyzer-PRO/6.2'})
+        with urlopen(req,timeout=25) as resp:
+            payload=json.loads(resp.read().decode('utf-8'))
+            code=getattr(resp,'status',200)
+        if not isinstance(payload,dict) or payload.get('error'):
+            err=(payload.get('error') if isinstance(payload,dict) else None) or {'message':'Risposta JSON non valida'}
+            PITCHAPI_LAST_ERROR=str(err)[:350]
+            PITCHAPI_LAST_STATUS={'configured':True,'ok':False,'path':path,'http':code,'error':err}
+            return None
+        if 'data' not in payload:
+            PITCHAPI_LAST_ERROR='Risposta PitchAPI senza campo data'
+            PITCHAPI_LAST_STATUS={'configured':True,'ok':False,'path':path,'http':code,'error':PITCHAPI_LAST_ERROR}
+            return None
+        data=payload.get('data')
+        cache[key]={'ts':now,'data':data}
+        _context_cache_save(cache)
+        PITCHAPI_LAST_ERROR=''
+        PITCHAPI_LAST_STATUS={'configured':True,'ok':True,'cached':False,'path':path,'http':code}
+        return data
+    except Exception as exc:
+        PITCHAPI_LAST_ERROR=f'{type(exc).__name__}: {exc}'
+        PITCHAPI_LAST_STATUS={'configured':True,'ok':False,'path':path,'http':getattr(exc,'code',None),'error':PITCHAPI_LAST_ERROR}
+        return None
+
+def pitchapi_serie_a():
+    """Resolve Serie A's opaque PitchAPI league ID and current season dynamically."""
+    leagues_data=pitchapi_get('/leagues',ttl=7*86400)
+    leagues=(leagues_data or {}).get('leagues',[]) if isinstance(leagues_data,dict) else []
+    league=next((x for x in leagues if str(x.get('name','')).strip().lower()=='serie a'
+                 and str(x.get('country_code','')).upper() in ('ITA','IT','ITALY')),None)
+    if not league:
+        league=next((x for x in leagues if str(x.get('name','')).strip().lower()=='serie a'),None)
+    if not league or not league.get('id'):
+        if PITCHAPI_API_KEY and PITCHAPI_LAST_STATUS.get('ok'):
+            PITCHAPI_LAST_STATUS.update({'ok':False,'error':'Serie A non trovata in /v1/leagues'})
+        return None
+    detail=pitchapi_get('/leagues/'+str(league['id']),ttl=7*86400)
+    season=(detail or {}).get('season') if isinstance(detail,dict) else None
+    seasons=league.get('seasons') or []
+    if not season and seasons:
+        season=seasons[0]
+    if not season:
+        y=date.today().year
+        season=f'{y}/{y+1}' if date.today().month>=7 else f'{y-1}/{y}'
+    try:
+        start=int(str(season).split('/')[0])
+        previous=f'{start-1}/{start}'
+    except Exception:
+        y=date.today().year;previous=f'{y-1}/{y}'
+    return {'id':league['id'],'name':league.get('name','Serie A'),'season':season,
+            'seasons':list(dict.fromkeys([season,previous]+[x for x in seasons if x!=season]))}
+
+def pitchapi_league_matches(league_id,season,status='played'):
+    ttl=90 if status=='all' else 6*3600
+    path=f'/leagues/{league_id}/matches?season={quote_plus(str(season))}&status={quote_plus(status)}'
+    data=pitchapi_get(path,ttl=ttl)
+    return data.get('matches',[]) if isinstance(data,dict) else []
+
+def _pitchapi_team_key(name):
+    s=_player_name_key(norm_team(str(name or '')))
+    for token in ('football club','calcio','inter milan','ac milan','as roma','ssc napoli'):
+        if token in ('inter milan','ac milan','as roma','ssc napoli'):
+            continue
+        s=s.replace(token,' ')
+    return re.sub(r'[^a-z0-9]+','',s)
+
+def _pitchapi_same_team(a,b):
+    x=_pitchapi_team_key(a);y=_pitchapi_team_key(b)
+    if not x or not y:return False
+    if x==y:return True
+    return min(len(x),len(y))>=4 and (x.endswith(y) or y.endswith(x) or x in y or y in x)
+
+def pitchapi_matches_for_fixture(r,status='all'):
+    league=pitchapi_serie_a()
+    if not league:return (None,[])
+    candidates=[]
+    target_date=str(r.get('date') or '')
+    for season in league['seasons'][:2]:
+        rows=pitchapi_league_matches(league['id'],season,status=status)
+        for m in rows:
+            home=(m.get('home_team') or {}).get('name','')
+            away=(m.get('away_team') or {}).get('name','')
+            if not (_pitchapi_same_team(home,r.get('home')) and _pitchapi_same_team(away,r.get('away'))):continue
+            md=str(m.get('date') or '')
+            try:distance=abs((date.fromisoformat(md)-date.fromisoformat(target_date)).days)
+            except Exception:distance=0
+            candidates.append((distance,m))
+    if not candidates:return (league,[])
+    candidates.sort(key=lambda x:(x[0],x[1].get('date','')))
+    # An exact/near fixture is preferred; still return a unique same-team match
+    # if the local calendar is provisional and provider dates were rescheduled.
+    return league,[candidates[0][1]]
+
+def _pitchapi_flat_player_stats(player_row):
+    """Flatten the documented PitchAPI stat groups by stable inner stat key."""
+    out={};labels={}
+    for group in (player_row.get('stats') or []):
+        for label,item in (group.get('stats') or {}).items():
+            if not isinstance(item,dict):continue
+            spec=item.get('stat') or {}
+            key=spec.get('key') or item.get('key')
+            value=spec.get('value')
+            if key and value is not None:out[str(key).lower()]=value
+            norm=re.sub(r'[^a-z0-9]+','_',str(label).lower()).strip('_')
+            if norm and value is not None:labels[norm]=value
+            if key and spec.get('total') is not None:out[str(key).lower()+'_total']=spec.get('total')
+    out['_labels']=labels
+    return out
+
+def _pitchapi_pick(stats,keys,labels=()):
+    for key in keys:
+        if key in stats and stats[key] is not None:return stats[key]
+    label_map=stats.get('_labels') or {}
+    for label in labels:
+        key=re.sub(r'[^a-z0-9]+','_',label.lower()).strip('_')
+        if key in label_map and label_map[key] is not None:return label_map[key]
+    return None
+
+def _pitchapi_num(value):
+    try:
+        if value is None or value=='':return None
+        return float(value)
+    except Exception:return None
+
+def _pitchapi_live_status(status):
+    s=re.sub(r'[^a-z0-9]+','',str(status or '').lower())
+    if not s:return False
+    if s in ('notstarted','scheduled','upcoming','finished','ended','afterextratime','penaltyshootout','postponed','cancelled','canceled','tbd'):return False
+    return s in ('live','inplay','inprogress','firsthalf','secondhalf','halftime','half','1h','2h','ht','extratime','penalties','break') or s not in ('notstarted','scheduled','upcoming','finished','ended','afterextratime','penaltyshootout','postponed','cancelled','canceled','tbd')
+
+def pitchapi_live_match_data(r):
+    """Load one selected Serie A match's live team and individual statistics."""
+    if not PITCHAPI_API_KEY:
+        return {'available':False,'isLive':False,'reason':'PITCHAPI_API_KEY non configurata'}
+    if str(r.get('date') or '')!=date.today().isoformat():
+        return {'available':False,'isLive':False,'reason':'Partita selezionata non in data odierna'}
+    league,matches=pitchapi_matches_for_fixture(r,status='all')
+    if not matches:
+        return {'available':False,'isLive':False,'reason':str(PITCHAPI_LAST_ERROR or 'Partita non trovata nel calendario PitchAPI')}
+    m=matches[0];mid=m.get('id')
+    if not mid:return {'available':False,'isLive':False,'reason':'ID partita PitchAPI mancante'}
+    summary=pitchapi_get('/matches/'+str(mid),ttl=35)
+    summary=summary if isinstance(summary,dict) else m
+    status=summary.get('status') or m.get('status') or ''
+    if not _pitchapi_live_status(status):
+        return {'available':True,'isLive':False,'source':'PitchAPI','reason':'Partita non live (stato: '+str(status or 'non indicato')+')'}
+    detail_players=pitchapi_get('/matches/'+str(mid)+'/players',ttl=50)
+    player_rows=detail_players if isinstance(detail_players,list) else []
+    home=(summary.get('home_team') or m.get('home_team') or {})
+    away=(summary.get('away_team') or m.get('away_team') or {})
+    home_id=home.get('id');away_id=away.get('id')
+    players=[]
+    for row in player_rows:
+        p=row.get('player') or {};tm=row.get('team_id')
+        side='home' if tm==home_id else 'away' if tm==away_id else None
+        if not side:continue
+        st=_pitchapi_flat_player_stats(row)
+        minutes=_pitchapi_pick(st,('minutes_played','minutes'))
+        total_shots=_pitchapi_pick(st,('total_shots','shots','total_scoring_att'),('total shots','shots'))
+        sot=_pitchapi_pick(st,('shots_on_target','on_target_shots','shot_accuracy','on_target_scoring_att'),('shot accuracy','shots on target'))
+        players.append({'name':p.get('name'),'team':home.get('name') if side=='home' else away.get('name'),'side':side,
+            'minutes':minutes,'rating':_pitchapi_pick(st,('rating_title','rating'),('rating',)),
+            'shots':total_shots,'sot':sot,
+            'fouls':_pitchapi_pick(st,('fouls_committed','fouls'),('fouls committed','fouls')),
+            'fouled':_pitchapi_pick(st,('fouls_won','fouls_drawn','foul_won','foul_drawn'),('fouls won','fouls drawn')),
+            'yellow':_pitchapi_pick(st,('yellow_cards','yellow_card','yellowcard'),('yellow cards','yellow card')),
+            'red':_pitchapi_pick(st,('red_cards','red_card','redcard'),('red cards','red card')),
+            'goals':_pitchapi_pick(st,('goals',),('goals',)),'assists':_pitchapi_pick(st,('assists',),('assists',))})
+    team_data=pitchapi_get('/matches/'+str(mid)+'/stats',ttl=50)
+    periods=(team_data or {}).get('periods',[]) if isinstance(team_data,dict) else []
+    period=next((x for x in periods if str(x.get('period','')).lower() in ('all','fullmatch')),periods[0] if periods else {})
+    team_stats={'home':[],'away':[]}
+    for group in (period or {}).get('groups',[]):
+        for item in group.get('items',[]):
+            label=item.get('title') or item.get('key')
+            hv=item.get('home');av=item.get('away')
+            if label and hv is not None:team_stats['home'].append({'label':str(label),'value':hv})
+            if label and av is not None:team_stats['away'].append({'label':str(label),'value':av})
+    return {'available':True,'isLive':True,'source':'PitchAPI','fixtureId':mid,'status':status,
+            'elapsed':summary.get('minute') or summary.get('elapsed'),
+            'home':home.get('name') or r.get('home'),'away':away.get('name') or r.get('away'),
+            'homeGoals':summary.get('score_home'),'awayGoals':summary.get('score_away'),
+            'teamStats':team_stats,'players':players,
+            'updated':datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+
+def pitchapi_player_history(team_name,target_date=None,limit=12):
+    """Aggregate player performance from the last 12 completed Serie A matches for this club."""
+    if not PITCHAPI_API_KEY:return []
+    target_date=str(target_date or date.today().isoformat())
+    team_key=_pitchapi_team_key(team_name)
+    cache=_context_cache_load();cache_key='pitchapi_player_history:'+team_key+':'+target_date
+    now=time.time();cached=cache.get(cache_key)
+    if cached and now-cached.get('ts',0)<6*3600 and isinstance(cached.get('data'),list):
+        PITCHAPI_LAST_STATUS={'configured':True,'ok':True,'cached_history':True,'team':team_name,'players':len(cached['data'])}
+        return cached['data']
+    league=pitchapi_serie_a()
+    if not league:return []
+    matches_by_id={}
+    for season in league['seasons'][:2]:
+        for m in pitchapi_league_matches(league['id'],season,status='played'):
+            mid=m.get('id')
+            if not mid:continue
+            md=str(m.get('date') or '')
+            if target_date and md and md>=target_date:continue
+            h=(m.get('home_team') or {}).get('name','');a=(m.get('away_team') or {}).get('name','')
+            if _pitchapi_same_team(h,team_name) or _pitchapi_same_team(a,team_name):
+                # Prefer the record with scores/status populated if two season feeds overlap.
+                matches_by_id[mid]=m
+    recent=sorted(matches_by_id.values(),key=lambda x:(str(x.get('date') or ''),str(x.get('time_utc') or '')),reverse=True)[:limit]
+    agg={}
+    errors=[]
+    for match in recent:
+        mid=match.get('id')
+        raw=pitchapi_get('/matches/'+str(mid)+'/players',ttl=30*86400)
+        if not isinstance(raw,list):
+            if PITCHAPI_LAST_ERROR:errors.append(str(PITCHAPI_LAST_ERROR)[:100])
+            continue
+        match_home=(match.get('home_team') or {}).get('name','')
+        match_away=(match.get('away_team') or {}).get('name','')
+        home_id=(match.get('home_team') or {}).get('id');away_id=(match.get('away_team') or {}).get('id')
+        wanted_side='home' if _pitchapi_same_team(match_home,team_name) else 'away'
+        wanted_id=home_id if wanted_side=='home' else away_id
+        lineup=pitchapi_get('/matches/'+str(mid)+'/lineups',ttl=30*86400)
+        started=set()
+        if isinstance(lineup,dict):
+            side_data=lineup.get(wanted_side) or {}
+            for sp in side_data.get('starters') or []:
+                if sp.get('player_id') is not None:started.add(str(sp.get('player_id')))
+                if sp.get('name'):started.add('name:'+_player_name_key(sp.get('name')))
+        for row in raw:
+            if wanted_id is not None and row.get('team_id')!=wanted_id:continue
+            p=row.get('player') or {}
+            pname=str(p.get('name') or '').strip()
+            if not pname:continue
+            stats=_pitchapi_flat_player_stats(row)
+            mins=_pitchapi_num(_pitchapi_pick(stats,('minutes_played','minutes'),('minutes played','minutes')))
+            if mins is None or mins<=0:continue
+            pid=str(p.get('id') or _player_name_key(pname))
+            key=pid
+            if key not in agg:
+                agg[key]={'id':pid,'name':pname,'position':p.get('position_id'),'apps':0,'starts':0,
+                          'minutes':0.0,'goals':0.0,'assists':0.0,'xg':0.0,'fouls':0.0,
+                          'fouled':0.0,'shots':0.0,'sot':0.0,'cards':0.0,
+                          '_metric_minutes':{},'_metric_seen':{},'_historyProvider':'PitchAPI','historyMatches':[]}
+            a=agg[key];a['apps']+=1;a['minutes']+=mins
+            if pid in started or ('name:'+_player_name_key(pname)) in started:a['starts']+=1
+            metric_keys={
+                'goals':(('goals',),('goals',)),
+                'assists':(('assists',),('assists',)),
+                'xg':(('expected_goals','xg'),('expected goals','xg')),
+                'fouls':(('fouls_committed','fouls'),('fouls committed','fouls')),
+                'fouled':(('fouls_won','fouls_drawn','foul_won','foul_drawn'),('fouls won','fouls drawn')),
+                'shots':(('total_shots','shots','total_scoring_att'),('total shots','shots')),
+                'sot':(('shots_on_target','on_target_shots','shot_accuracy','on_target_scoring_att'),('shots on target','shot accuracy')),
+                'cards':(('yellow_cards','yellow_card','yellowcard'),('yellow cards','yellow card'))
+            }
+            for field,(keys,labels) in metric_keys.items():
+                val=_pitchapi_num(_pitchapi_pick(stats,keys,labels))
+                if val is None:continue
+                a[field]+=val
+                a['_metric_minutes'][field]=a['_metric_minutes'].get(field,0.0)+mins
+                a['_metric_seen'][field]=a['_metric_seen'].get(field,0)+1
+            a['historyMatches'].append({'date':match.get('date'),'matchId':mid})
+    out=[]
+    for a in agg.values():
+        mins=a['minutes'] or 1.0
+        a['starterPct']=round(100*a['starts']/max(1,a['apps']),1)
+        a['avgMinutes']=round(a['minutes']/max(1,a['apps']),1)
+        for field in ('goals','assists','xg','fouls','fouled','shots','sot','cards'):
+            denom=a['_metric_minutes'].get(field,0.0)
+            a[field+'90']=round(a[field]/denom*90,2) if denom>0 else None
+            if not denom:a[field]=None
+        a['historySeasons']=sorted(set(str(x.get('date',''))[:4] for x in a['historyMatches'] if x.get('date')))
+        a.pop('_metric_minutes',None);a.pop('_metric_seen',None)
+        out.append(a)
+    cache[cache_key]={'ts':now,'data':out}
+    _context_cache_save(cache)
+    PITCHAPI_LAST_STATUS={'configured':True,'ok':bool(out),'team':team_name,'matches_used':len(recent),'players':len(out),
+        'error':None if out else (errors[-1] if errors else PITCHAPI_LAST_ERROR or 'Nessuno storico giocatore restituito da PitchAPI')}
+    return sorted(out,key=lambda x:_pitchapi_num(x.get('minutes')) or 0,reverse=True)
+
 def player_props(d,r):
     e=sofa_event_for(r)
     probable=fantacalcio_probable_lineups()
