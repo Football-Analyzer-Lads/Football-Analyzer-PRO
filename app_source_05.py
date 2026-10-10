@@ -681,6 +681,9 @@ def pitchapi_player_history(team_name,target_date=None,limit=12):
         if shot_feed_available:
             for period in shot_data.get('periods') or []:
                 for shot in period.get('shots') or []:
+                    # An own goal is not a shot credited to the player in the
+                    # player-stat convention.
+                    if shot.get('is_own_goal'):continue
                     shot_player=shot.get('player') or {}
                     shot_team=shot.get('team_id')
                     if wanted_id is not None and shot_team!=wanted_id:continue
@@ -688,10 +691,11 @@ def pitchapi_player_history(team_name,target_date=None,limit=12):
                     sname=_player_name_key(shot_player.get('name'))
                     keys=[('id',sid)] if sid else []
                     if sname:keys.append(('name',sname))
+                    event_type=re.sub(r'[^a-z0-9]+','',str(shot.get('event_type') or '').lower())
+                    is_sot=event_type in ('goal','attemptsaved')
                     for kind,pk in keys:
                         shot_counts[(kind,pk)]=shot_counts.get((kind,pk),0)+1
-                        if shot.get('is_on_target') is True:
-                            sot_counts[(kind,pk)]=sot_counts.get((kind,pk),0)+1
+                        if is_sot:sot_counts[(kind,pk)]=sot_counts.get((kind,pk),0)+1
                         xg_value=_pitchapi_num(shot.get('expected_goals'))
                         if xg_value is not None:shot_xg[(kind,pk)]=shot_xg.get((kind,pk),0.0)+xg_value
         event_data=pitchapi_get('/matches/'+str(mid)+'/events',ttl=30*86400)
@@ -1054,7 +1058,7 @@ def api_pitchapi_status():
     sample={'playerRows':0,'match':None,'ok':False}
     # Also test an actual match/player-stat endpoint; a league listing alone is not
     # enough to consider the integration healthy.
-    for m in sorted(played,key=lambda x:str(x.get('date') or ''),reverse=True)[:3]:
+    for m in sorted(played,key=lambda x:str(x.get('date') or ''),reverse=True)[:12]:
         mid=m.get('id')
         if not mid:continue
         rows=pitchapi_get('/matches/'+str(mid)+'/players',ttl=30*86400)
