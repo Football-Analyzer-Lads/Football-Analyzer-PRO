@@ -471,10 +471,20 @@ def pitchapi_serie_a():
             'seasons':list(dict.fromkeys([season,previous]+[x for x in seasons if x!=season]))}
 
 def pitchapi_league_matches(league_id,season,status='played'):
+    # The documented endpoint accepts season, not a status query parameter.
+    # Fetch the supported response once and filter the status locally.
     ttl=90 if status=='all' else 6*3600
-    path=f'/leagues/{league_id}/matches?season={quote_plus(str(season))}&status={quote_plus(status)}'
+    path=f'/leagues/{league_id}/matches?season={quote_plus(str(season))}'
     data=pitchapi_get(path,ttl=ttl)
-    return data.get('matches',[]) if isinstance(data,dict) else []
+    matches=data.get('matches',[]) if isinstance(data,dict) else []
+    def state(match):
+        return re.sub(r'[^a-z0-9]+','',str(match.get('status') or '').lower())
+    finished={'finished','fulltime','afterextratime','penaltyshootout','aet','ft'}
+    pending={'scheduled','notstarted','upcoming','tbd','notplayed'}
+    if status=='played':return [m for m in matches if state(m) in finished]
+    if status=='upcoming':return [m for m in matches if state(m) in pending]
+    if status=='live':return [m for m in matches if _pitchapi_live_status(m.get('status'))]
+    return matches
 
 def _pitchapi_team_key(name):
     s=_player_name_key(norm_team(str(name or '')))
@@ -556,9 +566,16 @@ def pitchapi_live_match_data(r):
         return {'available':False,'isLive':False,'reason':'PITCHAPI_API_KEY non configurata'}
     if str(r.get('date') or '')!=date.today().isoformat():
         return {'available':False,'isLive':False,'reason':'Partita selezionata non in data odierna'}
-    league,matches=pitchapi_matches_for_fixture(r,status='all')
+    # The date endpoint returns the free-tier covered fixtures for today and
+    # avoids scanning whole seasons to find a live match.
+    day_data=pitchapi_get('/date/'+date.today().isoformat(),ttl=25)
+    day_matches=day_data.get('matches',[]) if isinstance(day_data,dict) else []
+    target_home=r.get('home');target_away=r.get('away')
+    matches=[m for m in day_matches
+             if _pitchapi_same_team((m.get('home_team') or {}).get('name',''),target_home)
+             and _pitchapi_same_team((m.get('away_team') or {}).get('name',''),target_away)]
     if not matches:
-        return {'available':False,'isLive':False,'reason':str(PITCHAPI_LAST_ERROR or 'Partita non trovata nel calendario PitchAPI')}
+        return {'available':False,'isLive':False,'reason':str(PITCHAPI_LAST_ERROR or 'Partita non trovata nel calendario PitchAPI per oggi')}
     m=matches[0];mid=m.get('id')
     if not mid:return {'available':False,'isLive':False,'reason':'ID partita PitchAPI mancante'}
     summary=pitchapi_get('/matches/'+str(mid),ttl=35)
