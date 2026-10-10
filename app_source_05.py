@@ -270,6 +270,86 @@ def sofa_team_id_for_name(team_name):
                 return tid
     return None
 
+def api_football_live_match_data(r):
+    """Fetch live team and player box-score for one selected Serie A fixture.
+    Uses API-Football's authenticated endpoints; cached to conserve daily quota.
+    """
+    if not API_FOOTBALL_KEY:
+        return {'available':False,'reason':'API_FOOTBALL_KEY non configurata'}
+    try:
+        today=date.today().isoformat()
+        if r.get('date') != today:
+            return {'available':False,'reason':'La partita selezionata non è in data odierna'}
+        payload=api_football_get(f'/fixtures?live=all&league={API_FOOTBALL_LEAGUE}&season={today[:4]}',ttl=90) or {}
+        live_fixtures=payload.get('response') or []
+        def team_key(value):
+            s=norm_team(str(value or '')).lower()
+            s=re.sub(r'\b(fc|cf|ssc|calcio|1907|1919|1927|1928|1912)\b','',s)
+            return re.sub(r'[^a-z0-9]+','',s)
+        target_home=team_key(r.get('home'));target_away=team_key(r.get('away'))
+        match=None
+        for fx in live_fixtures:
+            teams=fx.get('teams') or {}
+            hh=team_key((teams.get('home') or {}).get('name'))
+            aa=team_key((teams.get('away') or {}).get('name'))
+            if hh==target_home and aa==target_away:
+                match=fx;break
+        if not match:
+            return {'available':True,'isLive':False,'reason':'Nessuna partita selezionata attualmente live su API-Football'}
+        fixture=(match.get('fixture') or {})
+        fixture_id=fixture.get('id')
+        if not fixture_id:
+            return {'available':False,'reason':'ID fixture live non disponibile'}
+        status=fixture.get('status') or {}
+        score=match.get('goals') or {}
+        team_box=api_football_get(f'/fixtures/statistics?fixture={fixture_id}',ttl=120) or {}
+        player_box=api_football_get(f'/fixtures/players?fixture={fixture_id}',ttl=120) or {}
+        side_ids={}
+        for side in ('home','away'):
+            side_ids[side]=((match.get('teams') or {}).get(side) or {}).get('id')
+        team_stats={'home':[],'away':[]}
+        raw_team_stats=team_box.get('response') or []
+        for item in raw_team_stats:
+            team=item.get('team') or {}
+            side='home' if team.get('id')==side_ids['home'] else 'away' if team.get('id')==side_ids['away'] else None
+            if not side:continue
+            for stat in item.get('statistics') or []:
+                label=str(stat.get('type') or '').strip()
+                val=stat.get('value')
+                if val is not None:
+                    team_stats[side].append({'label':label,'value':val})
+        players=[]
+        for team_item in (player_box.get('response') or []):
+            team=team_item.get('team') or {}
+            side='home' if team.get('id')==side_ids['home'] else 'away' if team.get('id')==side_ids['away'] else None
+            if not side:continue
+            for item in team_item.get('players') or []:
+                p=item.get('player') or {}
+                stat_list=item.get('statistics') or []
+                st=stat_list[0] if stat_list else {}
+                games=st.get('games') or {};shots=st.get('shots') or {};fouls=st.get('fouls') or {}
+                cards=st.get('cards') or {};goals=st.get('goals') or {}
+                if not p.get('name'):continue
+                players.append({
+                    'name':p.get('name'),'team':team.get('name') or r[side],'side':side,
+                    'minutes':games.get('minutes'),'rating':games.get('rating'),
+                    'shots':shots.get('total'),'sot':shots.get('on'),
+                    'fouls':fouls.get('committed'),'fouled':fouls.get('drawn'),
+                    'yellow':cards.get('yellow'),'red':cards.get('red'),
+                    'goals':goals.get('total'),'assists':goals.get('assists')
+                })
+        return {
+            'available':True,'isLive':True,'source':'API-Football',
+            'fixtureId':fixture_id,'status':status.get('long') or status.get('short') or 'Live',
+            'elapsed':status.get('elapsed'),'home':(match.get('teams') or {}).get('home',{}).get('name') or r['home'],
+            'away':(match.get('teams') or {}).get('away',{}).get('name') or r['away'],
+            'homeGoals':score.get('home'),'awayGoals':score.get('away'),
+            'teamStats':team_stats,'players':players,
+            'updated':datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        }
+    except Exception as exc:
+        return {'available':False,'reason':'Errore recupero dati live: '+str(exc)[:180]}
+
 def player_props(d,r):
     e=sofa_event_for(r)
     probable=fantacalcio_probable_lineups()
@@ -282,6 +362,8 @@ def player_props(d,r):
     # historical player aggregates instead of returning an empty screen.
     lu=sofa_get(f"/event/{e['id']}/lineups",ttl=900) if e else None
     result['lineupsAvailable']=bool(lu)
+    # Live feed is queried only for today's selected match, not for every scheduled fixture.
+    result['liveMatch']=api_football_live_match_data(r) if r.get('date')==date.today().isoformat() else {'available':False,'isLive':False,'reason':'Partita non in data odierna'}
     histories={}
     history_diagnostics=[]
     for side in ('home','away'):
