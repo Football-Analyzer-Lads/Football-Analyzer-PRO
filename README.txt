@@ -32,6 +32,22 @@ AVVIO MAC
 NOTA
 Il feed news usa Google News RSS. Le news sono contesto editoriale e non vengono trasformate automaticamente in probabilità del modello.
 
+PLAYER ANALYZER — PITCHAPI FREE
+--------------------------------
+Il Player Analyzer usa PitchAPI come fonte primaria per lo storico statistico dei giocatori della Serie A; mantiene SofaScore e API-Football come fonti di riserva. Il piano Free di PitchAPI include la Serie A e gli endpoint per dati partita, formazioni e statistiche dei giocatori.
+
+CONFIGURAZIONE (una sola volta)
+1) Crea una chiave gratuita su https://pitchapi.dev/.
+2) Apri il file config.env nella cartella del software e aggiungi:
+   PITCHAPI_API_KEY=INCOLLA_LA_TUA_CHIAVE_QUI
+3) Salva il file e riavvia il programma con ./start.command.
+4) In Player Analyzer clicca "Verifica PitchAPI". Deve confermare il collegamento e mostrare il numero di partite Serie A disponibili.
+5) Se il test riesce, scegli una partita e clicca "Analizza giocatori". La prima richiesta dello storico può impiegare più tempo; lo storico viene poi salvato nella cache locale.
+
+Non pubblicare né inviare la chiave API. Il programma legge PITCHAPI_API_KEY dal file config.env sul Mac; il file locale config.env viene preservato dall'aggiornatore automatico.
+
+Se la verifica fallisce, il test mostra lo stato HTTP o il messaggio del provider. Non inserire percentuali per statistiche mancanti: in tal caso il campo resta vuoto e il motivo viene riportato nella diagnostica.
+
 QUOTE DI RIFERIMENTO (opzionale)
 -------------------------------
 Per mostrare automaticamente quote reali sulle partite future, il software usa API-Football. Bet365 viene preferito quando disponibile; se non lo è, viene usato un altro bookmaker con la migliore copertura dei mercati supportati.
