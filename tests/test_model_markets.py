@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 PARTS = sorted(ROOT.glob("app_source_*.py"))
 SOURCE = "\n".join(p.read_text(encoding="utf-8").rstrip("\n") for p in PARTS) + "\n"
 TREE = ast.parse(SOURCE)
-NEEDED = {"pois", "score_matrix", "markets"}
+NEEDED = {"pois", "score_matrix", "markets", "_poisson_tail_over", "_count_market_prob"}
 FUNCTIONS = {
     node.name: node
     for node in ast.walk(TREE)
@@ -23,7 +23,7 @@ if FUNCTIONS.keys() != NEEDED:
 
 module = ast.Module(
     body=[ast.Import(names=[ast.alias(name="math")])]
-    + [FUNCTIONS[name] for name in ("pois", "score_matrix", "markets")],
+    + [FUNCTIONS[name] for name in ("pois", "score_matrix", "markets", "_poisson_tail_over", "_count_market_prob")],
     type_ignores=[],
 )
 ast.fix_missing_locations(module)
@@ -31,6 +31,7 @@ NS = {}
 exec(compile(module, "market_math.py", "exec"), NS)
 score_matrix = NS["score_matrix"]
 markets = NS["markets"]
+count_market_prob = NS["_count_market_prob"]
 
 
 class MarketProbabilityTests(unittest.TestCase):
@@ -58,6 +59,19 @@ class MarketProbabilityTests(unittest.TestCase):
                 self.assertAlmostEqual(p["GG"] + p["NG"], 1.0, places=9)
                 self.assertAlmostEqual(p["O2.5"] + p["U2.5"], 1.0, places=9)
                 self.assertTrue(all(0.0 <= v <= 1.0 for v in p.values()))
+
+    def test_shot_volume_probabilities_are_complements_and_monotone(self):
+        for mean in (4.5, 13.0, 22.5, 30.0):
+            for line in (8.5, 15.5, 22.5, 30.5):
+                over = count_market_prob(mean, line, True)
+                under = count_market_prob(mean, line, False)
+                self.assertTrue(0.0 <= over <= 1.0)
+                self.assertTrue(0.0 <= under <= 1.0)
+                self.assertAlmostEqual(over + under, 1.0, places=10)
+            self.assertGreaterEqual(count_market_prob(mean, 10.5, True),
+                                    count_market_prob(mean, 20.5, True))
+            self.assertGreaterEqual(count_market_prob(mean, 20.5, False),
+                                    count_market_prob(mean, 30.5, False))
 
     def test_goal_over_probabilities_are_monotone(self):
         p = markets(1.7, 1.15)
