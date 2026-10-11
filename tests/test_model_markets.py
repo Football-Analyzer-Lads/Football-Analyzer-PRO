@@ -51,6 +51,23 @@ class MarketProbabilityTests(unittest.TestCase):
         self.assertAlmostEqual(p_home_strong["MGH2-4"], p_away_strong["MGA2-4"], places=10)
         self.assertAlmostEqual(p_home_strong["MGA2-4"], p_away_strong["MGH2-4"], places=10)
 
+    def test_total_multigoal_1_to_2_matches_exact_score_probabilities(self):
+        # At league-like expected goals of 1.45 home + 1.15 away,
+        # the 1-2 total-goals band should be calculated from exact score cells,
+        # not copied from a team-only marginal or a fixed percentage.
+        home_xg, away_xg = 1.45, 1.15
+        matrix = score_matrix(home_xg, away_xg)
+        p = markets(home_xg, away_xg)
+        expected = sum(
+            matrix[i][j]
+            for i in range(len(matrix))
+            for j in range(len(matrix))
+            if 1 <= i + j <= 2
+        )
+        self.assertAlmostEqual(p["MG1-2"], expected, places=10)
+        self.assertLess(p["MG1-2"], 0.50)
+        self.assertEqual(round(1.0 / p["MG1-2"], 2), 2.33)
+
     def test_probability_partitions_sum_to_one(self):
         for home_xg, away_xg in ((0.4, 0.7), (1.25, 1.1), (2.4, 0.65), (4.5, 4.0)):
             with self.subTest(home_xg=home_xg, away_xg=away_xg):
