@@ -70,8 +70,8 @@ class MarketProbabilityTests(unittest.TestCase):
                 self.assertAlmostEqual(over + under, 1.0, places=10)
             self.assertGreaterEqual(count_market_prob(mean, 10.5, True),
                                     count_market_prob(mean, 20.5, True))
-            self.assertGreaterEqual(count_market_prob(mean, 20.5, False),
-                                    count_market_prob(mean, 30.5, False))
+            self.assertGreaterEqual(count_market_prob(mean, 30.5, False),
+                                    count_market_prob(mean, 20.5, False))
 
     def test_goal_over_probabilities_are_monotone(self):
         p = markets(1.7, 1.15)
