@@ -26,11 +26,15 @@
 def pois(k,l):return math.exp(-l)*l**k/math.factorial(k)
 
 def score_matrix(h,a,rho=-0.12):
-    m=[[pois(i,h)*pois(j,a) for j in range(10)] for i in range(10)]
+    # A 0..12 goal grid keeps the Poisson tail small even for high-scoring
+    # forecasts. Matrix rows are HOME goals, columns are AWAY goals.
+    grid=range(13)
+    m=[[pois(i,h)*pois(j,a) for j in grid] for i in grid]
     # Dixon-Coles low-score correction, then renormalize.
     corr={(0,0):1-h*a*rho,(1,0):1+a*rho,(0,1):1+h*rho,(1,1):1-rho}
     for (i,j),c in corr.items():m[i][j]*=max(0.2,c)
-    z=sum(map(sum,m));return [[v/z for v in row] for row in m]
+    z=sum(map(sum,m))
+    return [[v/z for v in row] for row in m]
 
 def markets(h,a):
     m=score_matrix(h,a);p={};mg={}
@@ -44,9 +48,10 @@ def markets(h,a):
         p[f'O{n}.5']=sum(v for g,v in mg.items() if g>n)
         if n in (2,3):
             p[f'U{n}.5']=sum(v for g,v in mg.items() if g<=n)
-    # Multigol is split into: total match, home team goals, away team goals.
-    home_goals={i:sum(row[i] for row in m) for i in range(10)}
-    away_goals={j:sum(m[i][j] for i in range(10)) for j in range(10)}
+    # Matrix orientation: rows are home-goal counts; columns are away-goal counts.
+    # Therefore home probabilities are row sums and away probabilities are column sums.
+    home_goals={i:sum(m[i]) for i in range(len(m))}
+    away_goals={j:sum(m[i][j] for i in range(len(m))) for j in range(len(m))}
     for lo,hi in [(1,2),(1,3),(1,4),(2,3),(2,4),(2,5),(3,4),(3,5),(3,6),(4,5),(4,6)]:
         p[f'MG{lo}-{hi}']=sum(v for g,v in mg.items() if lo<=g<=hi)
         p[f'MGH{lo}-{hi}']=sum(v for g,v in home_goals.items() if lo<=g<=hi)
