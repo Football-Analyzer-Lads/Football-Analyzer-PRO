@@ -253,12 +253,11 @@ def xg(d,h,a):
             return .55*ratios[0]+.20*ratios[1]+.15*ratios[2]+.10*ratios[3]
         return .70*ratios[0]+.20*ratios[1]+.10*sum(ratios[2:])/max(1,len(ratios[2:]))
 
-    # Use current-season venue xG where there is a usable sample. With only a
-    # couple of matches, blend toward the team's broader historical profile.
+    # Shrink estimates toward league scoring rates unless we have actual provider
+    # xG. xg_matches also counts estimates reconstructed from shots; that is NOT
+    # independent evidence and must not make an estimate look fully calibrated.
     def sample_weight(profile, venue):
-        n=profile.get('xg_matches',0)
-        # overall verified xG is a safer sample-size proxy than pretending we have
-        # a large venue-specific xG sample.
+        n=profile.get('xg_verified_matches',0)
         return min(1.0, 0.45 + 0.10*min(n,5))
 
     home_attack=strength(hp,'home',sa['home_xg'],lh,sa['home_shots'],sa['home_sot'],True)
