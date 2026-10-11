@@ -23,6 +23,8 @@ jobs:
           compile(Path("app.py").read_text(encoding="utf-8"), "app.py", "exec")
           print("Assembled application syntax: OK")
           PY
+      - name: Run market probability regression tests
+        run: python -m unittest discover -s tests -v
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
